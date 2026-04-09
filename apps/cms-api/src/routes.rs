@@ -566,7 +566,27 @@ fn sample_workflow_request(state: &AppState) -> WorkflowRequest {
             .clone(),
         input_payload: serde_json::json!({
             "instruction": "refresh the homepage hero and CTA copy",
-            "component_id": "hero.v1"
+            "component_id": "hero.v1",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5-20250929",
+            "context_documents": [
+                {
+                    "id": "homepage",
+                    "title": "Homepage",
+                    "content": "The current hero copy is generic and underplays the lifestyle angle."
+                },
+                {
+                    "id": "brand-voice",
+                    "title": "Brand Voice",
+                    "content": "Use direct, hospitality-led language and avoid filler."
+                }
+            ],
+            "evaluation": {
+                "provider": "langsmith",
+                "project": "rusty-cms",
+                "evaluators": ["brand_voice", "clarity"],
+                "tags": ["ai-content", "draft"]
+            }
         }),
         artifact_contract: WorkflowArtifactContract {
             output_schema: "schemas/ai-content-operation-output.json".to_owned(),

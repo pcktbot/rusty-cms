@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from rusty_cms_temporal.activities import execute_ai_content_operation
 from rusty_cms_temporal.workflows import CmsWorkflowRequest
 
 
@@ -28,6 +29,7 @@ async def main() -> None:
             worker = Worker(
                 client,
                 task_queue=task_queue,
+                activities=[execute_ai_content_operation],
                 workflows=[CmsWorkflowRequest],
             )
             await stack.enter_async_context(worker)
@@ -42,4 +44,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

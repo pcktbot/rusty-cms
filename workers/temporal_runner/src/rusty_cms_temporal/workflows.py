@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from temporalio import workflow
 
 
@@ -7,6 +9,13 @@ from temporalio import workflow
 class CmsWorkflowRequest:
     @workflow.run
     async def run(self, request: dict) -> dict:
+        if request["kind"] == "AiContentOperation":
+            return await workflow.execute_activity(
+                "execute_ai_content_operation",
+                request,
+                start_to_close_timeout=timedelta(minutes=10),
+            )
+
         return {
             "accepted": True,
             "workflow_kind": request["kind"],
@@ -15,4 +24,3 @@ class CmsWorkflowRequest:
             "requested_runtime": request["requested_runtime"],
             "temporal_queue": request["temporal_queue"],
         }
-

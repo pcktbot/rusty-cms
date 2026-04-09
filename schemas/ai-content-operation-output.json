@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/ai-content-operation-output.json",
+  "title": "AiContentOperationOutput",
+  "type": "object",
+  "required": [
+    "accepted",
+    "workflow_kind",
+    "site_id",
+    "branch_name",
+    "requested_runtime",
+    "temporal_queue",
+    "ai_execution"
+  ],
+  "properties": {
+    "accepted": {
+      "type": "boolean"
+    },
+    "workflow_kind": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "branch_name": {
+      "type": "string"
+    },
+    "requested_runtime": {
+      "type": "string"
+    },
+    "temporal_queue": {
+      "type": "string"
+    },
+    "ai_execution": {
+      "type": "object",
+      "required": [
+        "provider",
+        "model",
+        "retrieval_mode",
+        "retrieved_contexts",
+        "evaluation",
+        "usage",
+        "output_text"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "component_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retrieval_mode": {
+          "type": "string"
+        },
+        "retrieved_contexts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "document_id"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source_uri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "evaluation": {
+          "type": "object",
+          "required": [
+            "provider",
+            "trace_enabled",
+            "evaluators",
+            "tags",
+            "metadata",
+            "notes"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "trace_enabled": {
+              "type": "boolean"
+            },
+            "project": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evaluators": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadata": {
+              "type": "object"
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "usage": {
+          "type": "object"
+        },
+        "stop_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
