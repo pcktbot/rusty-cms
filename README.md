@@ -15,6 +15,7 @@ See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewr
 Quick start:
 
 - Copy `.env.example` to `.env` and stage your local settings.
+- `cargo run -p cms-worker -- migrate`
 - `cargo test`
 - `cargo run -p cms-api`
 - Open `http://127.0.0.1:4000/viewer` for the temporary server-render preview UI.
