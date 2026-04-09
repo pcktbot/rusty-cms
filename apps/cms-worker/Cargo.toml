@@ -1,0 +1,16 @@
+[package]
+name = "cms-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cms-core = { path = "../../crates/cms-core" }
+cms-pubsub = { path = "../../crates/cms-pubsub" }
+cms-render = { path = "../../crates/cms-render" }
+cms-workflows = { path = "../../crates/cms-workflows" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+

@@ -1,0 +1,12 @@
+{
+  "name": "@g5/test-cms-ui",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "bun@1.3.2",
+  "scripts": {
+    "check": "echo \"UI scaffold pending\"",
+    "dev": "echo \"UI scaffold pending\"",
+    "test": "echo \"UI scaffold pending\""
+  }
+}
+
