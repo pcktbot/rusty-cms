@@ -54,14 +54,54 @@ Suggested primary tables:
 - `workflow_requests`
 - `agent_runs`
 - `audit_events`
+- `component_sources`
+- `widget_definitions`
+- `widget_definition_versions`
+- `widget_instances`
 
 ### Authoring model
 
 - A `site` owns one or more `branches`.
+- A `site` can either be a standard site or a template site.
+- A standard site can optionally inherit from a template site as its source baseline.
 - A `branch` points at a mutable head snapshot.
 - A `snapshot` is immutable and represents the full publishable state for one site branch.
-- Each `page_document` is JSONB and stores a component tree, not rows of widget settings.
+- Widget instances are the primary editable units on a page.
+- Widget definitions are versioned artifacts resolved from either built-in primitives or registered component repos.
+- Each `page_document` stores page-level metadata and optional denormalized structure, while `widget_instances` hold the editable widget tree for a snapshot.
 - `pages` use a materialized path for hierarchy and ordering, so move/copy operations are path updates plus document rewrites.
+
+### Widget model
+
+- `component_source`
+  - describes a registered component repo or other artifact source
+- `widget_definition`
+  - stable identity for a widget family such as `hero-banner` or `rich-text`
+- `widget_definition_version`
+  - immutable versioned contract for settings schema, editor schema, assets, runtime, and HTML support policy
+- `widget_instance`
+  - a page-level editable instance that points at a specific definition version and stores JSON settings
+
+This preserves the flexibility of the current widget/component repo system without forcing settings back into many relational rows.
+
+### Primitive vs registered widgets
+
+- Primitive widgets should still look like widget definitions and widget versions in the data model.
+- The difference is source:
+  - built-in primitive widgets use `source_kind = builtin`
+  - repo-backed widgets use `source_kind = registry_repo`
+
+That avoids two incompatible editing systems.
+
+### Template sites
+
+Template sites should be first-class sites, not a separate content type.
+
+- `site_kind = template` marks a site as a reusable baseline
+- `source_template_site_id` links a standard site back to its source template
+- copy and restore operations can then operate at snapshot level while still knowing where inherited content came from
+
+This also makes “copy template to many sites” a predictable workflow primitive.
 
 ### Page document shape
 
@@ -86,8 +126,8 @@ Render from immutable snapshots, not live relational traversal.
 
 1. Load snapshot manifest.
 2. Resolve page hierarchy and routes.
-3. Resolve component packages and theme assets.
-4. Validate page documents against component schemas.
+3. Resolve widget definition versions, component packages, and theme assets.
+4. Validate widget settings and page documents against schemas.
 5. Render pages to HTML.
 6. Emit fingerprinted assets and a publish manifest.
 7. Atomically promote the completed build directory.
@@ -96,8 +136,16 @@ Render from immutable snapshots, not live relational traversal.
 
 - Rendering should be deterministic from `snapshot_id`.
 - Page HTML assembly should be tree-driven, not HTML-fragment mutation.
-- Layouts and components are versioned packages.
+- Layouts and widgets are versioned packages.
 - Server-side rendering should use a narrow template system and avoid arbitrary code execution inside templates.
+
+### Widget runtime strategy
+
+- Support mixed widget complexity levels.
+- Some widgets are primitive and server-rendered directly.
+- Some widgets are registry-backed and may ship client code in Svelte, React, Vue, or plain JS.
+- The server should resolve widget contracts uniformly regardless of source.
+- Allow raw HTML support only through explicit widget capabilities and policy flags.
 
 ### Template strategy
 
@@ -159,6 +207,9 @@ Event categories:
 - `workflow.failed`
 - `agent.run.accepted`
 - `agent.run.rejected`
+- `widget.definition.published`
+- `widget.instance.updated`
+- `site.template.applied`
 
 ### v1 transport
 
@@ -223,7 +274,7 @@ Unit testing is required from the start.
 
 ### Rust backend
 
-- Unit tests in each crate for domain rules, renderer behavior, workflow admission, and pubsub contracts.
+- Unit tests in each crate for domain rules, widget contract validation, renderer behavior, workflow admission, and pubsub contracts.
 - Integration tests for API handlers and publish flows.
 - Golden tests for rendered HTML and publish manifests.
 - Contract tests for JSON Schema compatibility.

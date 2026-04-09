@@ -1,6 +1,7 @@
 use axum::{Json, Router, extract::State, response::Html, routing::get};
 use cms_core::health::HealthStatus;
 use cms_core::site::SiteSnapshotRef;
+use cms_core::widget::{WidgetCommand, WidgetDefinitionRef};
 use cms_pubsub::{MemoryPubSub, PubSub};
 use cms_render::RenderEngine;
 use cms_workflows::{
@@ -41,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/api/workflows/definitions", get(workflow_definitions))
         .route("/api/demo/workflow-request", get(demo_workflow_request))
+        .route("/api/demo/widget-command", get(demo_widget_command))
         .route("/preview/demo", get(preview_demo))
         .route("/viewer", get(viewer))
         .with_state(state)
@@ -100,6 +102,24 @@ async fn demo_workflow_request(State(state): State<AppState>) -> Json<WorkflowRe
     };
 
     Json(request)
+}
+
+async fn demo_widget_command() -> Json<WidgetCommand> {
+    Json(WidgetCommand::InsertWidget {
+        region: "main".to_owned(),
+        position: 0,
+        definition: WidgetDefinitionRef {
+            definition_id: Uuid::parse_str("33333333-3333-3333-3333-333333333333").unwrap(),
+            version_id: Uuid::parse_str("44444444-4444-4444-4444-444444444444").unwrap(),
+            slug: "hero-banner".to_owned(),
+            version: "3.4.1".to_owned(),
+        },
+        settings: serde_json::json!({
+            "headline": "A better place to live",
+            "cta_text": "Schedule a tour",
+            "image_asset_id": "asset_123"
+        }),
+    })
 }
 
 async fn preview_demo(State(state): State<AppState>) -> Html<String> {
@@ -288,6 +308,7 @@ async fn viewer(State(state): State<AppState>) -> Html<String> {
           <div class="actions">
             <a class="btn primary" href="/preview/demo" target="preview-frame">Load preview</a>
             <a class="btn" href="/api/demo/workflow-request" target="_blank">View workflow JSON</a>
+            <a class="btn" href="/api/demo/widget-command" target="_blank">View widget command</a>
           </div>
           <div class="workflow-list">{workflow_cards}</div>
         </section>

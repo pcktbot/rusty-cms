@@ -17,6 +17,10 @@
   - `snapshots`
   - `pages`
   - `page_documents`
+  - `component_sources`
+  - `widget_definitions`
+  - `widget_definition_versions`
+  - `widget_instances`
   - `publish_jobs`
   - `workflow_requests`
 - Define typed DTOs and API envelopes.
@@ -26,16 +30,19 @@
 
 - Create branch and snapshot APIs.
 - Implement page CRUD against JSONB page documents.
+- Implement widget definition registry reads and widget instance CRUD.
 - Add hierarchy operations:
   - move page
   - copy subtree
   - restore snapshot
   - bulk apply subtree to many sites
+  - apply template site snapshot to derived sites
 
 ## Phase 3: Rendering and publishing
 
 - Add component package loader.
 - Add theme and layout resolution.
+- Add widget definition resolution from built-in and repo-backed sources.
 - Render one page from one snapshot.
 - Expand to full-site snapshot builds.
 - Write publish manifest and perform atomic release promotion on disk.
