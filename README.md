@@ -12,3 +12,8 @@ Current direction:
 
 See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/architecture.md) and [`docs/roadmap.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/roadmap.md).
 
+Quick start:
+
+- `cargo test`
+- `cargo run -p cms-api`
+- Open `http://127.0.0.1:4000/viewer` for the temporary server-render preview UI.
