@@ -280,6 +280,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/demo/workflow-request", get(demo_workflow_request))
         .route("/api/demo/widget-command", get(demo_widget_command))
         .route("/preview/demo", get(preview_demo))
+        .route("/migration-console", get(migration_console))
         .route("/viewer", get(viewer))
         .with_state(state)
         .layer(CompressionLayer::new())
@@ -918,6 +919,7 @@ async fn viewer(State(state): State<AppState>) -> Html<String> {
           </p>
           <div class="actions">
             <a class="btn primary" href="/preview/demo" target="preview-frame">Load preview</a>
+            <a class="btn" href="/migration-console">Migration console</a>
             <a class="btn" href="/api/sites" target="_blank">View sites</a>
             <a class="btn" href="/api/widget-definitions" target="_blank">Widget registry</a>
             <a class="btn" href="/api/runtime" target="_blank">Runtime config</a>
@@ -937,6 +939,441 @@ async fn viewer(State(state): State<AppState>) -> Html<String> {
   </body>
 </html>"#
     ))
+}
+
+async fn migration_console() -> Html<String> {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Migration Console</title>
+    <style>
+      :root {
+        --bg: #f3f0e8;
+        --panel: #fffdf8;
+        --ink: #111111;
+        --muted: #555555;
+        --line: #111111;
+        --accent: #d64a1f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      }
+      .pane {
+        padding: 20px;
+      }
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+      .card {
+        background: var(--panel);
+        border: 2px solid var(--line);
+        box-shadow: 8px 8px 0 var(--line);
+        padding: 18px;
+      }
+      h1, h2, h3, p {
+        margin: 0;
+      }
+      h1 {
+        font-size: 1.7rem;
+        line-height: 1;
+      }
+      h2 {
+        font-size: 0.95rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .actions, .inline {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      input, select {
+        width: 100%;
+        min-height: 42px;
+        border: 2px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        padding: 10px 12px;
+        font: inherit;
+      }
+      input[type="checkbox"] {
+        width: auto;
+        min-height: auto;
+      }
+      button, a.btn {
+        min-height: 42px;
+        border: 2px solid var(--line);
+        background: var(--accent);
+        color: #fff;
+        padding: 10px 14px;
+        font: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      button.secondary, a.btn.secondary {
+        background: #fff;
+        color: var(--ink);
+      }
+      form {
+        display: grid;
+        gap: 12px;
+      }
+      .row-2 {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .checklist {
+        display: grid;
+        gap: 8px;
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 2px solid var(--line);
+        background: #fff;
+      }
+      .status {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        font: inherit;
+      }
+      .pages {
+        display: grid;
+        gap: 10px;
+      }
+      .page {
+        border: 2px solid var(--line);
+        background: #fff;
+        padding: 12px;
+      }
+      .page strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+      .pill {
+        display: inline-block;
+        border: 2px solid var(--line);
+        padding: 2px 6px;
+        margin: 4px 4px 0 0;
+        background: #fff7eb;
+      }
+      @media (max-width: 1020px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+        .row-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="pane">
+        <div class="stack">
+          <section class="card">
+            <h2>Migration Console</h2>
+            <h1>Crawl-first sandbox</h1>
+            <p>
+              Thin UI for migration workflows. Use it to kick off discovery, inspect
+              review records, and approve a job without building the full management app.
+            </p>
+            <div class="actions" style="margin-top:14px;">
+              <a class="btn secondary" href="/viewer">Back to viewer</a>
+              <button type="button" class="secondary" id="refresh-sites">Refresh sites</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <form id="migration-form">
+              <label>
+                Site
+                <select id="site-id" name="site_id"></select>
+              </label>
+              <label>
+                Homepage URL
+                <input id="homepage-url" name="homepage_url" value="https://g5-clw-hdmhijtexe-hearth.g5static.com/" />
+              </label>
+              <div class="row-2">
+                <label>
+                  Client ID
+                  <input id="client-id" name="client_id" value="aaaaaaaa-1111-1111-1111-111111111111" />
+                </label>
+                <label>
+                  Location ID
+                  <input id="location-id" name="location_id" value="bbbbbbbb-2222-2222-2222-222222222222" />
+                </label>
+              </div>
+              <div class="row-2">
+                <label>
+                  Crawl Scope
+                  <select id="crawl-scope" name="crawl_scope">
+                    <option value="subpath">subpath</option>
+                    <option value="homepage_only">homepage_only</option>
+                    <option value="site">site</option>
+                  </select>
+                </label>
+                <label>
+                  Max Pages
+                  <input id="max-pages" name="max_pages" type="number" min="1" value="50" />
+                </label>
+              </div>
+              <div class="checklist">
+                <label class="check"><input id="follow-subdomains" type="checkbox" /> follow_subdomains</label>
+                <label class="check"><input id="respect-robots" type="checkbox" checked /> respect_robots</label>
+                <label class="check"><input id="include-assets" type="checkbox" checked /> include_assets</label>
+                <label class="check"><input id="detect-widgets" type="checkbox" checked /> detect_registered_widgets</label>
+                <label class="check"><input id="legacy-enrichment" type="checkbox" /> use_legacy_api_enrichment</label>
+                <label class="check"><input id="screenshot-compare" type="checkbox" /> screenshot_compare_after_import</label>
+              </div>
+              <div class="actions">
+                <button type="submit">Create migration</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </aside>
+
+      <main class="pane">
+        <div class="stack">
+          <section class="card">
+            <div class="status" id="status">idle</div>
+            <pre id="log">Loading sites…</pre>
+          </section>
+
+          <section class="card">
+            <h2>Review</h2>
+            <div class="actions" style="margin: 12px 0 14px;">
+              <button type="button" class="secondary" id="load-latest">Load latest job</button>
+              <button type="button" id="approve-job">Approve job</button>
+            </div>
+            <div id="summary" class="stack"></div>
+            <div id="pages" class="pages"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const logEl = document.getElementById("log");
+      const siteSelect = document.getElementById("site-id");
+      const summaryEl = document.getElementById("summary");
+      const pagesEl = document.getElementById("pages");
+      let latestMigrationId = null;
+
+      function setStatus(value) {
+        statusEl.textContent = value;
+      }
+
+      function setLog(value) {
+        logEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      }
+
+      function renderSummary(job) {
+        summaryEl.innerHTML = "";
+        const block = document.createElement("div");
+        block.innerHTML = `
+          <p><strong>migration_id</strong>: ${job.id}</p>
+          <p><strong>workflow_id</strong>: ${job.workflow_id}</p>
+          <p><strong>status</strong>: ${job.status}</p>
+          <p><strong>homepage</strong>: ${job.homepage_url}</p>
+          <p><strong>page_count</strong>: ${job.page_count}</p>
+        `;
+        summaryEl.appendChild(block);
+
+        if (job.warnings && job.warnings.length > 0) {
+          const warnings = document.createElement("div");
+          warnings.innerHTML = `<p><strong>warnings</strong></p><pre>${job.warnings.join("\n")}</pre>`;
+          summaryEl.appendChild(warnings);
+        }
+      }
+
+      function renderPages(pages) {
+        pagesEl.innerHTML = "";
+        for (const page of pages) {
+          const node = document.createElement("article");
+          node.className = "page";
+          const widgetPills = (page.widget_matches || []).map((match) => `<span class="pill">${match}</span>`).join("");
+          node.innerHTML = `
+            <strong>${page.path}</strong>
+            <div>${page.title_guess}</div>
+            <div>confidence: ${page.confidence}</div>
+            <div>unknown_regions: ${page.unknown_regions}</div>
+            <div>${widgetPills || "<span class=\"pill\">no widgets detected</span>"}</div>
+          `;
+          pagesEl.appendChild(node);
+        }
+      }
+
+      async function fetchJson(url, options = {}) {
+        const response = await fetch(url, options);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.error || `request failed: ${response.status}`);
+        }
+        return body;
+      }
+
+      async function loadSites() {
+        setStatus("loading sites");
+        const sites = await fetchJson("/api/sites");
+        siteSelect.innerHTML = "";
+        if (!sites.length) {
+          const option = document.createElement("option");
+          option.textContent = "No sites found";
+          option.value = "";
+          siteSelect.appendChild(option);
+          setLog("No sites are available. Create a site row first, then reload.");
+          setStatus("no sites");
+          return;
+        }
+
+        for (const site of sites) {
+          const option = document.createElement("option");
+          option.value = site.id;
+          option.textContent = `${site.name} (${site.slug})`;
+          siteSelect.appendChild(option);
+        }
+        setLog(sites);
+        setStatus("ready");
+      }
+
+      async function loadMigration(migrationId) {
+        setStatus("loading migration");
+        const job = await fetchJson(`/api/migrations/${migrationId}`);
+        const pages = await fetchJson(`/api/migrations/${migrationId}/pages`);
+        latestMigrationId = migrationId;
+        renderSummary(job);
+        renderPages(pages);
+        setLog(job);
+        setStatus(`loaded ${migrationId}`);
+      }
+
+      document.getElementById("refresh-sites").addEventListener("click", async () => {
+        try {
+          await loadSites();
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("load-latest").addEventListener("click", async () => {
+        if (!latestMigrationId) {
+          setStatus("idle");
+          setLog("No migration job has been created in this console session yet.");
+          return;
+        }
+        try {
+          await loadMigration(latestMigrationId);
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("approve-job").addEventListener("click", async () => {
+        if (!latestMigrationId) {
+          setStatus("idle");
+          setLog("No migration selected.");
+          return;
+        }
+        try {
+          const result = await fetchJson(`/api/migrations/${latestMigrationId}/approve`, {
+            method: "POST"
+          });
+          setLog(result);
+          await loadMigration(latestMigrationId);
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("migration-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!siteSelect.value) {
+          setStatus("blocked");
+          setLog("A site must exist before a migration job can be created.");
+          return;
+        }
+
+        const payload = {
+          homepage_url: document.getElementById("homepage-url").value.trim(),
+          client_id: document.getElementById("client-id").value.trim(),
+          location_id: document.getElementById("location-id").value.trim(),
+          options: {
+            crawl_scope: document.getElementById("crawl-scope").value,
+            follow_subdomains: document.getElementById("follow-subdomains").checked,
+            max_pages: Number(document.getElementById("max-pages").value),
+            respect_robots: document.getElementById("respect-robots").checked,
+            include_assets: document.getElementById("include-assets").checked,
+            detect_registered_widgets: document.getElementById("detect-widgets").checked,
+            use_legacy_api_enrichment: document.getElementById("legacy-enrichment").checked,
+            screenshot_compare_after_import: document.getElementById("screenshot-compare").checked
+          }
+        };
+
+        try {
+          setStatus("creating migration");
+          const result = await fetchJson(`/api/sites/${siteSelect.value}/migrations`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          latestMigrationId = result.migration_id;
+          setLog(result);
+          await loadMigration(result.migration_id);
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      loadSites().catch((error) => {
+        setStatus("error");
+        setLog(String(error));
+      });
+    </script>
+  </body>
+</html>"#
+            .to_owned(),
+    )
 }
 
 fn sample_workflow_request(state: &AppState) -> WorkflowRequest {
