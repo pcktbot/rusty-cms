@@ -31,6 +31,7 @@ This starts workers for:
 - `cms-publish`
 - `cms-restore`
 - `cms-bulk`
+- `cms-migrations`
 - `cms-agent-ops`
 
 ## Trigger from API

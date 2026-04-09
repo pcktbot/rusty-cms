@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/site-migration-input.json",
+  "title": "SiteMigrationInput",
+  "type": "object",
+  "required": [
+    "homepage_url",
+    "client_id",
+    "location_id",
+    "options"
+  ],
+  "properties": {
+    "homepage_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "client_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "location_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "legacy_api_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "type": "object",
+      "required": [
+        "crawl_scope",
+        "max_pages",
+        "respect_robots",
+        "include_assets",
+        "detect_registered_widgets",
+        "use_legacy_api_enrichment",
+        "screenshot_compare_after_import"
+      ],
+      "properties": {
+        "crawl_scope": {
+          "type": "string",
+          "enum": [
+            "homepage_only",
+            "subpath",
+            "site"
+          ]
+        },
+        "follow_subdomains": {
+          "type": "boolean"
+        },
+        "max_pages": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "respect_robots": {
+          "type": "boolean"
+        },
+        "include_assets": {
+          "type": "boolean"
+        },
+        "detect_registered_widgets": {
+          "type": "boolean"
+        },
+        "use_legacy_api_enrichment": {
+          "type": "boolean"
+        },
+        "screenshot_compare_after_import": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/site-migration-output.json",
+  "title": "SiteMigrationOutput",
+  "type": "object",
+  "required": [
+    "accepted",
+    "workflow_kind",
+    "site_id",
+    "branch_name",
+    "requested_runtime",
+    "temporal_queue",
+    "migration"
+  ],
+  "properties": {
+    "accepted": {
+      "type": "boolean"
+    },
+    "workflow_kind": {
+      "type": "string"
+    },
+    "site_id": {
+      "type": "string"
+    },
+    "branch_name": {
+      "type": "string"
+    },
+    "requested_runtime": {
+      "type": "string"
+    },
+    "temporal_queue": {
+      "type": "string"
+    },
+    "migration": {
+      "type": "object",
+      "required": [
+        "status",
+        "homepage_url",
+        "client_id",
+        "location_id",
+        "page_count_guess",
+        "pages",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "review_ready",
+            "approved",
+            "imported",
+            "failed"
+          ]
+        },
+        "homepage_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "location_id": {
+          "type": "string"
+        },
+        "page_count_guess": {
+          "type": "integer"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "title_guess",
+              "widget_matches",
+              "unknown_regions",
+              "confidence"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "title_guess": {
+                "type": "string"
+              },
+              "widget_matches": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "unknown_regions": {
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

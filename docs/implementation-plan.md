@@ -1,0 +1,99 @@
+# Implementation Plan
+
+Status legend:
+
+- `implemented`: usable in the current codebase
+- `scaffolded`: contract or shell exists, but the core feature is not complete
+- `planned`: not started beyond design notes
+
+## Platform foundation
+
+- `implemented` Rust workspace and crate boundaries
+- `implemented` Postgres migrations for core CMS, widget registry, and template-site linkage
+- `implemented` `.env` loading and startup validation for Rust API and Temporal Python runner
+- `implemented` Temporal workflow admission matrix and queue definitions
+- `implemented` server preview viewer at `/viewer`
+
+## API
+
+- `implemented` runtime info route
+- `implemented` Postgres-backed read routes for sites, branches, branch heads, widget definitions, and widget definition versions when `DATABASE_URL` is configured
+- `implemented` fallback seeded catalog for local development when no database is configured
+- `implemented` workflow request submit/trigger routes with workflow-request persistence and outbox emission
+- `implemented` local widget source import route for registry inspection
+- `scaffolded` migration create/review/approve routes backed by in-memory records
+- `scaffolded` widget command route contract
+- `planned` branch CRUD, snapshot CRUD, page CRUD, asset CRUD, theme CRUD
+
+## Widget registry
+
+- `implemented` widget definition and version domain model
+- `implemented` widget registry migrations and read queries
+- `implemented` local repo importer that reads metadata from committed widget repos
+- `scaffolded` widget signature-based migration detection model in schemas and workflow plans only
+- `planned` registry persistence/import promotion from local repo into database rows and packaged artifacts
+- `planned` widget version migration hooks
+
+## Rendering and publishing
+
+- `implemented` preview render stub with snapshot identity
+- `implemented` publish state machine domain model
+- `scaffolded` publish target model and artifact tables
+- `planned` real snapshot renderer
+- `planned` full-site static build pipeline
+- `planned` atomic release promotion on disk
+- `planned` publish rollback controls
+
+## Workflows and workers
+
+- `implemented` Temporal Python worker with queues for publish, restore, bulk, migrations, and agent ops
+- `implemented` AI workflow runtime wrappers with provider abstraction, retrieval hooks, LangSmith flags, and Anthropic/Vertex adapter seams
+- `implemented` site migration workflow kind, queue, schemas, and worker stub
+- `scaffolded` site migration review artifact generation
+- `planned` durable workflow status tracking beyond workflow-request rows
+- `planned` Rust or Bun workflow workers for non-Python tasks
+
+## AI and evaluation
+
+- `implemented` provider-neutral AI activity orchestration
+- `implemented` mock provider path for deterministic local testing
+- `implemented` Anthropic adapter seam and LangSmith gating flags
+- `implemented` Vertex adapter seam
+- `scaffolded` LangSmith evaluation metadata emission
+- `planned` real retrieval layer
+- `planned` evaluator execution and scoring persistence
+- `planned` fine-tuned Vertex production path
+
+## Migration system
+
+- `implemented` migration request/output schemas
+- `implemented` migration API request contract:
+  - homepage URL
+  - client association
+  - location association
+  - crawl and enrichment options
+- `implemented` migration workflow admission and Temporal trigger path
+- `scaffolded` migration review records and page-level review endpoints
+- `scaffolded` site migration worker activity that returns placeholder review output
+- `planned` crawler
+- `planned` DOM/template classifier
+- `planned` registered-widget signature detection
+- `planned` targeted legacy API enrichment
+- `planned` draft snapshot importer
+- `planned` screenshot and content diff validation
+
+## UI
+
+- `implemented` temporary server-rendered preview shell
+- `scaffolded` API surfaces for the future migration and authoring UI
+- `planned` Bun + SvelteKit management app
+- `planned` migration review interface
+- `planned` page tree and widget editing shell
+
+## Immediate next steps
+
+1. Persist migration jobs and review artifacts in Postgres instead of memory.
+2. Add widget signature metadata to the registry model.
+3. Build the first crawl/discovery activity and connect it to the migration workflow.
+4. Promote imported widget repos into real registry rows and version artifacts.
+5. Replace widget-command stubs with draft snapshot mutations.

@@ -7,7 +7,10 @@ from contextlib import AsyncExitStack
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from rusty_cms_temporal.activities import execute_ai_content_operation
+from rusty_cms_temporal.activities import (
+    execute_ai_content_operation,
+    execute_site_migration_activity,
+)
 from rusty_cms_temporal.env import load_environment, validate_runtime_environment
 from rusty_cms_temporal.workflows import CmsWorkflowRequest
 
@@ -16,6 +19,7 @@ TASK_QUEUES = [
     "cms-publish",
     "cms-restore",
     "cms-bulk",
+    "cms-migrations",
     "cms-agent-ops",
 ]
 
@@ -32,7 +36,10 @@ async def main() -> None:
             worker = Worker(
                 client,
                 task_queue=task_queue,
-                activities=[execute_ai_content_operation],
+                activities=[
+                    execute_ai_content_operation,
+                    execute_site_migration_activity,
+                ],
                 workflows=[CmsWorkflowRequest],
             )
             await stack.enter_async_context(worker)

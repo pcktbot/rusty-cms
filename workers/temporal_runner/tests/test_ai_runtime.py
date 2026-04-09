@@ -14,6 +14,7 @@ from rusty_cms_temporal.ai.contracts import (
 )
 from rusty_cms_temporal.ai.orchestrator import execute_ai_workflow
 from rusty_cms_temporal.ai.retrieval import build_retriever
+from rusty_cms_temporal.migrations import execute_site_migration
 
 
 def sample_workflow_request() -> dict:
@@ -102,6 +103,35 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.provider, AiProviderKind.MOCK)
         self.assertEqual(request.retrieval.mode, RetrievalMode.INLINE)
         self.assertEqual(len(request.retrieval.documents), 2)
+
+    async def test_site_migration_stub_returns_review_ready_shape(self):
+        result = await execute_site_migration(
+            {
+                "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                "kind": "SiteMigration",
+                "site_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "branch_name": "migration/draft",
+                "requested_runtime": "Python",
+                "temporal_queue": "cms-migrations",
+                "input_payload": {
+                    "homepage_url": "https://example.com/floorplans",
+                    "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                    "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                    "options": {
+                        "detect_registered_widgets": True,
+                        "use_legacy_api_enrichment": True,
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["migration"]["status"], "review_ready")
+        self.assertEqual(result["migration"]["pages"][0]["path"], "/floorplans")
+        self.assertIn(
+            "registry-detection-pending",
+            result["migration"]["pages"][0]["widget_matches"],
+        )
 
 
 if __name__ == "__main__":

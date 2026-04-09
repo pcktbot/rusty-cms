@@ -10,7 +10,7 @@ Current direction:
 - Static publish target on persistent disk, with optional S3-backed object storage later.
 - Async workflow orchestration via Temporal-managed jobs and agent-driven requests.
 
-See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/architecture.md) and [`docs/roadmap.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/roadmap.md).
+See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/architecture.md), [`docs/roadmap.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/roadmap.md), and [`docs/implementation-plan.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/implementation-plan.md).
 
 Quick start:
 
@@ -35,6 +35,11 @@ Useful API routes:
 - `POST /api/sites/:site_id/pages/:page_id/widget-commands`
 - `POST /api/sites/:site_id/workflow-requests`
 - `POST /api/sites/:site_id/workflow-requests/trigger`
+- `POST /api/sites/:site_id/migrations`
+- `GET /api/migrations/:migration_id`
+- `GET /api/migrations/:migration_id/pages`
+- `GET /api/migrations/:migration_id/pages/:page_id`
+- `POST /api/migrations/:migration_id/approve`
 - `GET /api/widget-definitions`
 - `GET /api/widget-definitions/:slug/versions`
 - `POST /api/widget-sources/import-local`

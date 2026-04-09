@@ -1,5 +1,7 @@
 # Roadmap
 
+Current delivery status lives in [`docs/implementation-plan.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/implementation-plan.md).
+
 ## Phase 0
 
 - Establish Rust workspace and crate boundaries.
@@ -62,9 +64,18 @@
   - publish site
   - bulk copy content
   - restore snapshot
+  - site migration
   - ai-assisted content operation
 - Add runtime admission rules for Rust, Bun/TypeScript, and Python workers.
 - Validate workflow outputs before they can create snapshots.
+
+## Phase 5.5: Migration pipeline
+
+- Add crawl-first site discovery workflow.
+- Add widget signature registry for legacy output detection.
+- Add optional legacy CMS API enrichment for widget-specific recovery.
+- Add migration review artifacts and approval flow.
+- Import approved migrations into draft snapshots.
 
 ## Phase 6: UI
 

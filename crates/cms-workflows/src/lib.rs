@@ -15,6 +15,7 @@ pub enum WorkflowKind {
     SitePublish,
     RestoreSnapshot,
     BulkApplySnapshot,
+    SiteMigration,
     AiContentOperation,
 }
 
@@ -92,6 +93,12 @@ impl Default for WorkflowRuntimeMatrix {
                     accepted_runtimes: vec![AgentRuntime::Rust],
                 },
                 WorkflowDefinition {
+                    kind: WorkflowKind::SiteMigration,
+                    name: "site-migration".to_owned(),
+                    temporal_queue: "cms-migrations".to_owned(),
+                    accepted_runtimes: vec![AgentRuntime::Python, AgentRuntime::BunTypescript],
+                },
+                WorkflowDefinition {
                     kind: WorkflowKind::AiContentOperation,
                     name: "ai-content-operation".to_owned(),
                     temporal_queue: "cms-agent-ops".to_owned(),
@@ -116,6 +123,11 @@ impl WorkflowRuntimeMatrix {
                 }
             }
         }
+        runtimes.sort_by_key(|runtime| match runtime {
+            AgentRuntime::Rust => 0,
+            AgentRuntime::BunTypescript => 1,
+            AgentRuntime::Python => 2,
+        });
         runtimes
     }
 
@@ -168,7 +180,7 @@ mod tests {
             vec![
                 AgentRuntime::Rust,
                 AgentRuntime::BunTypescript,
-                AgentRuntime::Python
+                AgentRuntime::Python,
             ]
         );
     }
@@ -178,14 +190,14 @@ mod tests {
         let matrix = WorkflowRuntimeMatrix::default();
         let request = WorkflowRequest {
             id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
-            kind: WorkflowKind::AiContentOperation,
+            kind: WorkflowKind::SiteMigration,
             site_id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
-            branch_name: "draft".to_owned(),
+            branch_name: "migration/draft".to_owned(),
             requested_runtime: AgentRuntime::Python,
-            temporal_queue: "cms-agent-ops".to_owned(),
-            input_payload: serde_json::json!({ "prompt": "rewrite homepage hero" }),
+            temporal_queue: "cms-migrations".to_owned(),
+            input_payload: serde_json::json!({ "homepage_url": "https://example.com" }),
             artifact_contract: WorkflowArtifactContract {
-                output_schema: "schemas/ai-content-operation-output.json".to_owned(),
+                output_schema: "schemas/site-migration-output.json".to_owned(),
                 creates_snapshot: true,
                 mutates_branch_head: false,
             },
@@ -197,7 +209,7 @@ mod tests {
         };
 
         let definition = matrix.admit(&request).unwrap();
-        assert_eq!(definition.temporal_queue, "cms-agent-ops");
+        assert_eq!(definition.temporal_queue, "cms-migrations");
     }
 
     #[test]

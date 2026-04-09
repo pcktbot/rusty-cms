@@ -8,7 +8,8 @@ use cms_db::{pool, repositories::PgRepository};
 use cms_pubsub::{MemoryPubSub, PubSub};
 use cms_render::RenderEngine;
 use cms_workflows::WorkflowRuntimeMatrix;
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::sync::RwLock;
 use tracing::info;
 
 #[tokio::main]
@@ -34,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         renderer: RenderEngine,
         workflows: workflows.clone(),
         catalog: Arc::new(ApiCatalog::default()),
+        migrations: Arc::new(RwLock::new(HashMap::new())),
         repository: repository.clone(),
     };
 

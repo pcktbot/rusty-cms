@@ -24,9 +24,9 @@ use cms_workflows::{
     WorkflowSafetyPolicy,
 };
 use serde::{Deserialize, Serialize};
-use std::{process::Stdio, sync::Arc};
+use std::{collections::HashMap, process::Stdio, sync::Arc};
 use time::OffsetDateTime;
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::{io::AsyncWriteExt, process::Command, sync::RwLock};
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::error;
 use uuid::Uuid;
@@ -37,6 +37,7 @@ pub struct AppState {
     pub renderer: RenderEngine,
     pub workflows: WorkflowRuntimeMatrix,
     pub catalog: Arc<ApiCatalog>,
+    pub migrations: Arc<RwLock<HashMap<Uuid, MigrationJobRecord>>>,
     pub repository: Option<PgRepository>,
 }
 
@@ -107,6 +108,128 @@ pub struct ImportLocalWidgetSourceRequest {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationStatus {
+    Queued,
+    Running,
+    ReviewReady,
+    Approved,
+    Imported,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationCrawlScope {
+    HomepageOnly,
+    Subpath,
+    Site,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationOptions {
+    pub crawl_scope: MigrationCrawlScope,
+    pub follow_subdomains: bool,
+    pub max_pages: u32,
+    pub respect_robots: bool,
+    pub include_assets: bool,
+    pub detect_registered_widgets: bool,
+    pub use_legacy_api_enrichment: bool,
+    pub screenshot_compare_after_import: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMigrationRequest {
+    pub homepage_url: String,
+    pub client_id: Uuid,
+    pub location_id: Uuid,
+    pub legacy_api_profile: Option<String>,
+    pub options: MigrationOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationPageSummary {
+    pub id: Uuid,
+    pub path: String,
+    pub title_guess: String,
+    pub widget_matches: Vec<String>,
+    pub unknown_regions: u32,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationPageDetail {
+    pub id: Uuid,
+    pub path: String,
+    pub title_guess: String,
+    pub widget_matches: Vec<String>,
+    pub unknown_regions: u32,
+    pub confidence: f32,
+    pub warnings: Vec<String>,
+    pub extraction_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationJobRecord {
+    pub id: Uuid,
+    pub site_id: Uuid,
+    pub workflow_request_id: Uuid,
+    pub workflow_id: String,
+    pub branch_name: String,
+    pub homepage_url: String,
+    pub client_id: Uuid,
+    pub location_id: Uuid,
+    pub legacy_api_profile: Option<String>,
+    pub status: MigrationStatus,
+    pub options: MigrationOptions,
+    pub pages: Vec<MigrationPageDetail>,
+    pub warnings: Vec<String>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationJobSummary {
+    pub id: Uuid,
+    pub site_id: Uuid,
+    pub workflow_request_id: Uuid,
+    pub workflow_id: String,
+    pub branch_name: String,
+    pub homepage_url: String,
+    pub client_id: Uuid,
+    pub location_id: Uuid,
+    pub legacy_api_profile: Option<String>,
+    pub status: MigrationStatus,
+    pub options: MigrationOptions,
+    pub page_count: usize,
+    pub warnings: Vec<String>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateMigrationReceipt {
+    pub accepted: bool,
+    pub migration_id: Uuid,
+    pub workflow_request_id: Uuid,
+    pub workflow_id: String,
+    pub site_id: Uuid,
+    pub branch_name: String,
+    pub temporal_queue: String,
+    pub temporal_namespace: String,
+    pub temporal_ui_url: String,
+    pub status: MigrationStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationApprovalReceipt {
+    pub approved: bool,
+    pub migration_id: Uuid,
+    pub status: MigrationStatus,
+    pub approved_at: OffsetDateTime,
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -129,6 +252,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sites/{site_id}/workflow-requests/trigger",
             post(trigger_workflow_request),
         )
+        .route("/api/sites/{site_id}/migrations", post(create_migration))
         .route("/api/widget-definitions", get(widget_definitions))
         .route(
             "/api/widget-definitions/{slug}",
@@ -141,6 +265,16 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/widget-sources/import-local",
             post(import_local_widget_source),
+        )
+        .route("/api/migrations/{migration_id}", get(migration_detail))
+        .route("/api/migrations/{migration_id}/pages", get(migration_pages))
+        .route(
+            "/api/migrations/{migration_id}/pages/{page_id}",
+            get(migration_page_detail),
+        )
+        .route(
+            "/api/migrations/{migration_id}/approve",
+            post(approve_migration),
         )
         .route("/api/workflows/definitions", get(workflow_definitions))
         .route("/api/demo/workflow-request", get(demo_workflow_request))
@@ -347,6 +481,133 @@ async fn trigger_workflow_request(
             temporal_ui_url: state.config.temporal_ui_url.clone(),
         }),
     ))
+}
+
+async fn create_migration(
+    Path(site_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(request): Json<CreateMigrationRequest>,
+) -> Result<(StatusCode, Json<CreateMigrationReceipt>), (StatusCode, Json<serde_json::Value>)> {
+    ensure_site_exists(&state, site_id).await?;
+    let workflow_request = migration_workflow_request(&state, site_id, &request)?;
+    let definition = state.workflows.admit(&workflow_request).map_err(|error| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": error.to_string()
+            })),
+        )
+    })?;
+
+    upsert_workflow_request(&state, &workflow_request).await?;
+    emit_workflow_event(&state, &workflow_request, "workflow.requested", None).await?;
+
+    let result = start_temporal_workflow(&state.config, &workflow_request)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+        })?;
+
+    emit_workflow_event(
+        &state,
+        &workflow_request,
+        "workflow.started",
+        Some(serde_json::json!({
+            "workflow_id": result.workflow_id,
+            "run_id": result.run_id,
+            "namespace": result.namespace,
+            "task_queue": result.task_queue,
+        })),
+    )
+    .await?;
+
+    let record =
+        migration_record_from_request(site_id, &request, &workflow_request, &result.workflow_id);
+    state
+        .migrations
+        .write()
+        .await
+        .insert(record.id, record.clone());
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CreateMigrationReceipt {
+            accepted: true,
+            migration_id: record.id,
+            workflow_request_id: workflow_request.id,
+            workflow_id: result.workflow_id,
+            site_id,
+            branch_name: workflow_request.branch_name,
+            temporal_queue: definition.temporal_queue.clone(),
+            temporal_namespace: result.namespace,
+            temporal_ui_url: state.config.temporal_ui_url.clone(),
+            status: record.status,
+        }),
+    ))
+}
+
+async fn migration_detail(
+    Path(migration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<MigrationJobSummary>, StatusCode> {
+    let migrations = state.migrations.read().await;
+    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(migration_summary(record)))
+}
+
+async fn migration_pages(
+    Path(migration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<MigrationPageSummary>>, StatusCode> {
+    let migrations = state.migrations.read().await;
+    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(
+        record
+            .pages
+            .iter()
+            .map(migration_page_summary)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+async fn migration_page_detail(
+    Path((migration_id, page_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<MigrationPageDetail>, StatusCode> {
+    let migrations = state.migrations.read().await;
+    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
+    let page = record
+        .pages
+        .iter()
+        .find(|page| page.id == page_id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(page))
+}
+
+async fn approve_migration(
+    Path(migration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<MigrationApprovalReceipt>, StatusCode> {
+    let mut migrations = state.migrations.write().await;
+    let record = migrations
+        .get_mut(&migration_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let approved_at = OffsetDateTime::now_utc();
+    record.status = MigrationStatus::Approved;
+    record.approved_at = Some(approved_at);
+
+    Ok(Json(MigrationApprovalReceipt {
+        approved: true,
+        migration_id,
+        status: record.status.clone(),
+        approved_at,
+    }))
 }
 
 async fn widget_definitions(
@@ -714,6 +975,161 @@ fn sample_workflow_request(state: &AppState) -> WorkflowRequest {
     }
 }
 
+fn migration_workflow_request(
+    state: &AppState,
+    site_id: Uuid,
+    request: &CreateMigrationRequest,
+) -> Result<WorkflowRequest, (StatusCode, Json<serde_json::Value>)> {
+    if request.options.max_pages == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "options.max_pages must be greater than 0"
+            })),
+        ));
+    }
+
+    let definition = state
+        .workflows
+        .definition_for_kind(WorkflowKind::SiteMigration)
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "site migration workflow definition is missing"
+            })),
+        ))?;
+
+    Ok(WorkflowRequest {
+        id: Uuid::new_v4(),
+        kind: WorkflowKind::SiteMigration,
+        site_id,
+        branch_name: "migration/draft".to_owned(),
+        requested_runtime: AgentRuntime::Python,
+        temporal_queue: definition.temporal_queue.clone(),
+        input_payload: serde_json::json!({
+            "homepage_url": request.homepage_url,
+            "client_id": request.client_id,
+            "location_id": request.location_id,
+            "legacy_api_profile": request.legacy_api_profile,
+            "options": request.options,
+        }),
+        artifact_contract: WorkflowArtifactContract {
+            output_schema: "schemas/site-migration-output.json".to_owned(),
+            creates_snapshot: true,
+            mutates_branch_head: false,
+        },
+        safety_policy: WorkflowSafetyPolicy {
+            requires_human_approval: true,
+            max_sites_touched: 1,
+            allow_publish_side_effects: false,
+        },
+    })
+}
+
+fn migration_record_from_request(
+    site_id: Uuid,
+    request: &CreateMigrationRequest,
+    workflow_request: &WorkflowRequest,
+    workflow_id: &str,
+) -> MigrationJobRecord {
+    let homepage_page_id = Uuid::new_v4();
+    MigrationJobRecord {
+        id: Uuid::new_v4(),
+        site_id,
+        workflow_request_id: workflow_request.id,
+        workflow_id: workflow_id.to_owned(),
+        branch_name: workflow_request.branch_name.clone(),
+        homepage_url: request.homepage_url.clone(),
+        client_id: request.client_id,
+        location_id: request.location_id,
+        legacy_api_profile: request.legacy_api_profile.clone(),
+        status: MigrationStatus::Running,
+        options: request.options.clone(),
+        pages: vec![MigrationPageDetail {
+            id: homepage_page_id,
+            path: homepage_path(&request.homepage_url),
+            title_guess: "Homepage".to_owned(),
+            widget_matches: if request.options.detect_registered_widgets {
+                vec!["registry-detection-pending".to_owned()]
+            } else {
+                Vec::new()
+            },
+            unknown_regions: 1,
+            confidence: 0.25,
+            warnings: vec![
+                "Discovery scaffolded only. Crawl and DOM extraction are not implemented yet."
+                    .to_owned(),
+            ],
+            extraction_notes: vec![
+                "This placeholder page record exists so the review UI contract can be built before crawler integration."
+                    .to_owned(),
+            ],
+        }],
+        warnings: migration_warnings(request),
+        created_at: OffsetDateTime::now_utc(),
+        approved_at: None,
+    }
+}
+
+fn migration_summary(record: &MigrationJobRecord) -> MigrationJobSummary {
+    MigrationJobSummary {
+        id: record.id,
+        site_id: record.site_id,
+        workflow_request_id: record.workflow_request_id,
+        workflow_id: record.workflow_id.clone(),
+        branch_name: record.branch_name.clone(),
+        homepage_url: record.homepage_url.clone(),
+        client_id: record.client_id,
+        location_id: record.location_id,
+        legacy_api_profile: record.legacy_api_profile.clone(),
+        status: record.status.clone(),
+        options: record.options.clone(),
+        page_count: record.pages.len(),
+        warnings: record.warnings.clone(),
+        created_at: record.created_at,
+        approved_at: record.approved_at,
+    }
+}
+
+fn migration_page_summary(page: &MigrationPageDetail) -> MigrationPageSummary {
+    MigrationPageSummary {
+        id: page.id,
+        path: page.path.clone(),
+        title_guess: page.title_guess.clone(),
+        widget_matches: page.widget_matches.clone(),
+        unknown_regions: page.unknown_regions,
+        confidence: page.confidence,
+    }
+}
+
+fn migration_warnings(request: &CreateMigrationRequest) -> Vec<String> {
+    let mut warnings = vec![
+        "Migration foundation is scaffolded; crawler, classifier, and importer are pending."
+            .to_owned(),
+    ];
+    if request.options.use_legacy_api_enrichment {
+        warnings.push(
+            "Legacy API enrichment is enabled in the request contract but not implemented yet."
+                .to_owned(),
+        );
+    }
+    if request.options.screenshot_compare_after_import {
+        warnings.push(
+            "Screenshot comparison is planned, but no capture/diff pipeline exists yet.".to_owned(),
+        );
+    }
+    warnings
+}
+
+fn homepage_path(homepage_url: &str) -> String {
+    if let Some((_, remainder)) = homepage_url.split_once("://") {
+        if let Some((_, path)) = remainder.split_once('/') {
+            return format!("/{}", path);
+        }
+    }
+    "/".to_owned()
+}
+
 async fn ensure_site_exists(
     state: &AppState,
     site_id: Uuid,
@@ -940,6 +1356,7 @@ fn workflow_kind_name(kind: WorkflowKind) -> &'static str {
         WorkflowKind::SitePublish => "site_publish",
         WorkflowKind::RestoreSnapshot => "restore_snapshot",
         WorkflowKind::BulkApplySnapshot => "bulk_apply_snapshot",
+        WorkflowKind::SiteMigration => "site_migration",
         WorkflowKind::AiContentOperation => "ai_content_operation",
     }
 }
@@ -1043,6 +1460,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use std::collections::HashMap;
     use tower::ServiceExt;
 
     fn state() -> AppState {
@@ -1051,6 +1469,7 @@ mod tests {
             renderer: RenderEngine,
             workflows: WorkflowRuntimeMatrix::default(),
             catalog: Arc::new(ApiCatalog::default()),
+            migrations: Arc::new(RwLock::new(HashMap::new())),
             repository: None,
         }
     }
@@ -1156,5 +1575,48 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["widget_slug"], "simple-hero");
         assert_eq!(value["runtime"], "Svelte");
+    }
+
+    #[tokio::test]
+    async fn create_migration_stores_scaffolded_review_record() {
+        let site_id = Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let response = build_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sites/{site_id}/migrations"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "homepage_url": "https://example.com/",
+                            "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                            "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                            "options": {
+                                "crawl_scope": "subpath",
+                                "follow_subdomains": false,
+                                "max_pages": 25,
+                                "respect_robots": true,
+                                "include_assets": true,
+                                "detect_registered_widgets": true,
+                                "use_legacy_api_enrichment": false,
+                                "screenshot_compare_after_import": false
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn workflow_kind_name_includes_site_migration() {
+        assert_eq!(
+            workflow_kind_name(WorkflowKind::SiteMigration),
+            "site_migration"
+        );
     }
 }
