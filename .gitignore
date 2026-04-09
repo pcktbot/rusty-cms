@@ -11,3 +11,4 @@ coverage/
 tmp/
 workers/**/.venv/
 workers/**/__pycache__/
+workers/**/*.egg-info/

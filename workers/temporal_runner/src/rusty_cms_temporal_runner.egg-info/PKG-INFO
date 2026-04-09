@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: rusty-cms-temporal-runner
-Version: 0.1.0
-Summary: Temporal worker and workflow starter for rusty-cms
-Requires-Python: >=3.10
-Requires-Dist: temporalio<2,>=1.18
