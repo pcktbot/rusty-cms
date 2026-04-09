@@ -10,6 +10,7 @@ use axum::{
 use cms_core::health::HealthStatus;
 use cms_core::site::SiteSnapshotRef;
 use cms_core::widget::{WidgetCommand, WidgetDefinitionRef};
+use cms_registry::importer::{ImportedWidgetPackage, WidgetImportError, WidgetSourceImporter};
 use cms_render::RenderEngine;
 use cms_workflows::{
     AgentRuntime, WorkflowArtifactContract, WorkflowKind, WorkflowRequest, WorkflowRuntimeMatrix,
@@ -91,6 +92,11 @@ struct TemporalStartResult {
     namespace: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportLocalWidgetSourceRequest {
+    pub path: String,
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -121,6 +127,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/widget-definitions/{slug}/versions",
             get(widget_definition_versions),
+        )
+        .route(
+            "/api/widget-sources/import-local",
+            post(import_local_widget_source),
         )
         .route("/api/workflows/definitions", get(workflow_definitions))
         .route("/api/demo/workflow-request", get(demo_workflow_request))
@@ -299,6 +309,15 @@ async fn widget_definition_versions(
     }
 
     Ok(Json(state.catalog.widget_versions(&slug).to_vec()))
+}
+
+async fn import_local_widget_source(
+    Json(request): Json<ImportLocalWidgetSourceRequest>,
+) -> Result<Json<ImportedWidgetPackage>, (StatusCode, Json<serde_json::Value>)> {
+    WidgetSourceImporter::default()
+        .import_from_path(&request.path)
+        .map(Json)
+        .map_err(import_error_response)
 }
 
 async fn submit_widget_command(
@@ -562,6 +581,24 @@ fn sample_workflow_request(state: &AppState) -> WorkflowRequest {
     }
 }
 
+fn import_error_response(error: WidgetImportError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match error {
+        WidgetImportError::PathMissing(_) | WidgetImportError::RequiredFileMissing(_) => {
+            StatusCode::NOT_FOUND
+        }
+        WidgetImportError::ReadFailure { .. } | WidgetImportError::ParseFailure { .. } => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+    };
+
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error.to_string()
+        })),
+    )
+}
+
 fn sample_widget_command() -> WidgetCommand {
     WidgetCommand::InsertWidget {
         region: "main".to_owned(),
@@ -717,5 +754,33 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn import_local_widget_source_reads_fixture_repo() {
+        let fixture_path = format!(
+            "{}/../../crates/cms-registry/tests/fixtures/simple-widget",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let response = build_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/widget-sources/import-local")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({ "path": fixture_path })).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["widget_slug"], "simple-hero");
+        assert_eq!(value["runtime"], "Svelte");
     }
 }

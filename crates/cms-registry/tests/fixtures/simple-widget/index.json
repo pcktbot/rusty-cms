@@ -1,0 +1,19 @@
+{
+  "name": "Simple Hero",
+  "summary": "Fixture widget for importer tests",
+  "liquid": true,
+  "verticals": ["apartments"],
+  "remote_javascripts": ["show.js"],
+  "lib_edit_stylesheets": ["stylesheets/edit.css"],
+  "settings": [
+    {
+      "name": "headline",
+      "default_value": "Hello world"
+    },
+    {
+      "name": "show_cta",
+      "default_value": true
+    }
+  ]
+}
+

@@ -274,6 +274,7 @@ dependencies = [
  "cms-core",
  "cms-db",
  "cms-pubsub",
+ "cms-registry",
  "cms-render",
  "cms-workflows",
  "serde",
@@ -320,6 +321,16 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "cms-registry"
+version = "0.1.0"
+dependencies = [
+ "cms-core",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

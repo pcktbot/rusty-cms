@@ -5,6 +5,7 @@ members = [
   "crates/cms-core",
   "crates/cms-db",
   "crates/cms-pubsub",
+  "crates/cms-registry",
   "crates/cms-render",
   "crates/cms-workflows",
 ]

@@ -9,6 +9,7 @@ anyhow.workspace = true
 axum.workspace = true
 cms-core = { path = "../../crates/cms-core" }
 cms-db = { path = "../../crates/cms-db" }
+cms-registry = { path = "../../crates/cms-registry" }
 cms-render = { path = "../../crates/cms-render" }
 cms-pubsub = { path = "../../crates/cms-pubsub" }
 cms-workflows = { path = "../../crates/cms-workflows" }

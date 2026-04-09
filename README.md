@@ -29,6 +29,7 @@ Useful API routes:
 - `POST /api/sites/:site_id/workflow-requests/trigger`
 - `GET /api/widget-definitions`
 - `GET /api/widget-definitions/:slug/versions`
+- `POST /api/widget-sources/import-local`
 
 Temporal defaults:
 
@@ -41,3 +42,8 @@ Temporal worker staging:
 - Start the worker with `.venv/bin/python worker.py`
 - Set `TEMPORAL_RUNNER_PYTHON` to the worker virtualenv interpreter before starting `cms-api`
 - Trigger executions via `POST /api/sites/:site_id/workflow-requests/trigger`
+
+Widget source import:
+
+- Use `POST /api/widget-sources/import-local` with a local repo path
+- Example path in this workspace context: `../cms-widget-floor-plans-plus`
