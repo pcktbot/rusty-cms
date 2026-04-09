@@ -272,12 +272,14 @@ dependencies = [
  "anyhow",
  "axum",
  "cms-core",
+ "cms-db",
  "cms-pubsub",
  "cms-render",
  "cms-workflows",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -301,6 +303,7 @@ dependencies = [
 name = "cms-db"
 version = "0.1.0"
 dependencies = [
+ "cms-core",
  "serde",
  "serde_json",
  "sqlx",

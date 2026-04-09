@@ -11,3 +11,5 @@ sqlx.workspace = true
 time.workspace = true
 uuid.workspace = true
 
+[dependencies.cms-core]
+path = "../cms-core"

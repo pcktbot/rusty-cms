@@ -17,3 +17,19 @@ Quick start:
 - `cargo test`
 - `cargo run -p cms-api`
 - Open `http://127.0.0.1:4000/viewer` for the temporary server-render preview UI.
+
+Useful API routes:
+
+- `GET /api/runtime`
+- `GET /api/sites`
+- `GET /api/sites/:site_id/branches`
+- `GET /api/sites/:site_id/branches/:branch_name/head`
+- `POST /api/sites/:site_id/pages/:page_id/widget-commands`
+- `POST /api/sites/:site_id/workflow-requests`
+- `GET /api/widget-definitions`
+- `GET /api/widget-definitions/:slug/versions`
+
+Temporal defaults:
+
+- UI: `http://localhost:8233`
+- gRPC endpoint for workers/SDKs: `localhost:7233`
