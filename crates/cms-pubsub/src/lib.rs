@@ -55,4 +55,3 @@ mod tests {
         assert_eq!(pubsub.backend_name(), "memory");
     }
 }
-
