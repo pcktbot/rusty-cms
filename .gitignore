@@ -9,4 +9,5 @@ dist/
 !.env.example
 coverage/
 tmp/
-
+workers/**/.venv/
+workers/**/__pycache__/

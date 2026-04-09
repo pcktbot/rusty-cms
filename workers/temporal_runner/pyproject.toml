@@ -1,0 +1,19 @@
+[project]
+name = "rusty-cms-temporal-runner"
+version = "0.1.0"
+description = "Temporal worker and workflow starter for rusty-cms"
+requires-python = ">=3.10"
+dependencies = [
+  "temporalio>=1.18,<2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

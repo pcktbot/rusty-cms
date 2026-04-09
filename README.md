@@ -26,6 +26,7 @@ Useful API routes:
 - `GET /api/sites/:site_id/branches/:branch_name/head`
 - `POST /api/sites/:site_id/pages/:page_id/widget-commands`
 - `POST /api/sites/:site_id/workflow-requests`
+- `POST /api/sites/:site_id/workflow-requests/trigger`
 - `GET /api/widget-definitions`
 - `GET /api/widget-definitions/:slug/versions`
 
@@ -33,3 +34,10 @@ Temporal defaults:
 
 - UI: `http://localhost:8233`
 - gRPC endpoint for workers/SDKs: `localhost:7233`
+
+Temporal worker staging:
+
+- Worker package: [workers/temporal_runner/README.md](/Users/david.miller/Documents/current/test-cms-rewrite/workers/temporal_runner/README.md)
+- Start the worker with `.venv/bin/python worker.py`
+- Set `TEMPORAL_RUNNER_PYTHON` to the worker virtualenv interpreter before starting `cms-api`
+- Trigger executions via `POST /api/sites/:site_id/workflow-requests/trigger`

@@ -16,7 +16,8 @@ use cms_workflows::{
     WorkflowSafetyPolicy,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{process::Stdio, sync::Arc};
+use tokio::{io::AsyncWriteExt, process::Command};
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
@@ -71,6 +72,25 @@ pub struct WorkflowSubmissionReceipt {
     pub branch_name: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowTriggerReceipt {
+    pub admitted: bool,
+    pub started: bool,
+    pub workflow_id: String,
+    pub run_id: Option<String>,
+    pub temporal_queue: String,
+    pub temporal_namespace: String,
+    pub temporal_ui_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct TemporalStartResult {
+    workflow_id: String,
+    run_id: Option<String>,
+    task_queue: String,
+    namespace: String,
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -88,6 +108,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/sites/{site_id}/workflow-requests",
             post(submit_workflow_request),
+        )
+        .route(
+            "/api/sites/{site_id}/workflow-requests/trigger",
+            post(trigger_workflow_request),
         )
         .route("/api/widget-definitions", get(widget_definitions))
         .route(
@@ -196,6 +220,54 @@ async fn submit_workflow_request(
             temporal_grpc_endpoint: state.config.temporal_grpc_endpoint.clone(),
             site_id,
             branch_name: request.branch_name,
+        }),
+    ))
+}
+
+async fn trigger_workflow_request(
+    Path(site_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(request): Json<WorkflowRequest>,
+) -> Result<(StatusCode, Json<WorkflowTriggerReceipt>), (StatusCode, Json<serde_json::Value>)> {
+    if request.site_id != site_id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "site_id in path does not match workflow request body"
+            })),
+        ));
+    }
+
+    let definition = state.workflows.admit(&request).map_err(|error| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": error.to_string()
+            })),
+        )
+    })?;
+
+    let result = start_temporal_workflow(&state.config, &request)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+        })?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WorkflowTriggerReceipt {
+            admitted: true,
+            started: true,
+            workflow_id: result.workflow_id,
+            run_id: result.run_id,
+            temporal_queue: definition.temporal_queue.clone(),
+            temporal_namespace: result.namespace,
+            temporal_ui_url: state.config.temporal_ui_url.clone(),
         }),
     ))
 }
@@ -518,6 +590,42 @@ fn command_type(command: &WidgetCommand) -> &'static str {
     }
 }
 
+async fn start_temporal_workflow(
+    config: &AppConfig,
+    request: &WorkflowRequest,
+) -> Result<TemporalStartResult, String> {
+    let mut child = Command::new(&config.temporal_runner_python)
+        .arg(&config.temporal_runner_start_script)
+        .env("TEMPORAL_GRPC_ENDPOINT", &config.temporal_grpc_endpoint)
+        .env("TEMPORAL_NAMESPACE", &config.temporal_namespace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to spawn temporal start script: {error}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let payload = serde_json::to_vec(request)
+            .map_err(|error| format!("failed to serialize workflow request: {error}"))?;
+        stdin.write_all(&payload).await.map_err(|error| {
+            format!("failed to write workflow request to temporal script: {error}")
+        })?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|error| format!("failed waiting for temporal start script: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("temporal start script failed: {}", stderr.trim()));
+    }
+
+    serde_json::from_slice::<TemporalStartResult>(&output.stdout)
+        .map_err(|error| format!("failed to decode temporal start output: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +693,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn trigger_workflow_request_returns_bad_gateway_without_runner() {
+        let mut test_state = state();
+        test_state.config.temporal_runner_start_script = "/does/not/exist.py".to_owned();
+        let request = sample_workflow_request(&test_state);
+
+        let response = build_router(test_state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/sites/{}/workflow-requests/trigger",
+                        request.site_id
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     }
 }
