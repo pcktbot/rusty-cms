@@ -1,3 +1,4 @@
+use anyhow::Context;
 use cms_api::{
     catalog::ApiCatalog,
     config::AppConfig,
@@ -15,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = AppConfig::from_env();
+    let config = AppConfig::from_env().context("failed to load app configuration")?;
     let pubsub = MemoryPubSub::default();
     let workflows = WorkflowRuntimeMatrix::default();
     let state = AppState {
@@ -29,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
         supported_runtimes = ?workflows.supported_runtimes(),
         pubsub = pubsub.backend_name(),
         database_configured = config.database_url.is_some(),
+        database_required = config.require_database,
         temporal_ui_url = %config.temporal_ui_url,
         temporal_grpc_endpoint = %config.temporal_grpc_endpoint,
         "starting cms api"

@@ -59,7 +59,9 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
             vertex_project=None,
             vertex_location=None,
             vertex_model="gemini-2.5-flash",
+            langsmith_enabled=True,
             langsmith_tracing=False,
+            langsmith_evals_enabled=True,
             langsmith_project="rusty-cms",
         )
 

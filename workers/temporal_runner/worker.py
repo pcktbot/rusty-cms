@@ -8,6 +8,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from rusty_cms_temporal.activities import execute_ai_content_operation
+from rusty_cms_temporal.env import load_environment, validate_runtime_environment
 from rusty_cms_temporal.workflows import CmsWorkflowRequest
 
 
@@ -20,6 +21,8 @@ TASK_QUEUES = [
 
 
 async def main() -> None:
+    load_environment()
+    validate_runtime_environment()
     endpoint = os.environ.get("TEMPORAL_GRPC_ENDPOINT", "localhost:7233")
     namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
     client = await Client.connect(endpoint, namespace=namespace)

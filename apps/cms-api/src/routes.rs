@@ -694,7 +694,7 @@ mod tests {
 
     fn state() -> AppState {
         AppState {
-            config: AppConfig::from_env(),
+            config: AppConfig::for_tests(),
             renderer: RenderEngine,
             workflows: WorkflowRuntimeMatrix::default(),
             catalog: Arc::new(ApiCatalog::default()),

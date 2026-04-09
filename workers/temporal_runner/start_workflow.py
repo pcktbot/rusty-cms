@@ -7,10 +7,13 @@ import sys
 
 from temporalio.client import Client
 
+from rusty_cms_temporal.env import load_environment, validate_runtime_environment
 from rusty_cms_temporal.workflows import CmsWorkflowRequest
 
 
 async def main() -> None:
+    load_environment()
+    validate_runtime_environment()
     request = json.load(sys.stdin)
     endpoint = os.environ.get("TEMPORAL_GRPC_ENDPOINT", "localhost:7233")
     namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")

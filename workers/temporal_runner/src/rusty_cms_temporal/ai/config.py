@@ -22,6 +22,13 @@ def _provider_from_env() -> AiProviderKind:
     return AiProviderKind.MOCK
 
 
+def _langsmith_enabled_from_env() -> bool:
+    return _env_flag(
+        "CMS_AI_ENABLE_LANGSMITH",
+        default=_env_flag("LANGSMITH_TRACING", default=False),
+    )
+
+
 @dataclass(slots=True)
 class AiRuntimeConfig:
     default_provider: AiProviderKind
@@ -30,11 +37,14 @@ class AiRuntimeConfig:
     vertex_project: str | None
     vertex_location: str | None
     vertex_model: str
+    langsmith_enabled: bool
     langsmith_tracing: bool
+    langsmith_evals_enabled: bool
     langsmith_project: str | None
 
     @classmethod
     def from_env(cls) -> "AiRuntimeConfig":
+        langsmith_enabled = _langsmith_enabled_from_env()
         return cls(
             default_provider=_provider_from_env(),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -44,7 +54,16 @@ class AiRuntimeConfig:
             vertex_project=os.environ.get("CMS_AI_VERTEX_PROJECT"),
             vertex_location=os.environ.get("CMS_AI_VERTEX_LOCATION"),
             vertex_model=os.environ.get("CMS_AI_VERTEX_MODEL", "gemini-2.5-flash"),
-            langsmith_tracing=_env_flag("LANGSMITH_TRACING", default=False),
+            langsmith_enabled=langsmith_enabled,
+            langsmith_tracing=_env_flag(
+                "CMS_AI_ENABLE_LANGSMITH_TRACING",
+                default=langsmith_enabled,
+            )
+            or _env_flag("LANGSMITH_TRACING", default=False),
+            langsmith_evals_enabled=_env_flag(
+                "CMS_AI_ENABLE_LANGSMITH_EVALS",
+                default=langsmith_enabled,
+            ),
             langsmith_project=os.environ.get("LANGSMITH_PROJECT"),
         )
 

@@ -77,6 +77,10 @@ class LangSmithEvaluationRecorder:
             "Use LangSmith tracing wrappers or @traceable to capture production runs.",
             "Configure online evaluators on the traced project once the output contract stabilizes.",
         ]
+        if not self.config.langsmith_evals_enabled:
+            notes.append(
+                "CMS_AI_ENABLE_LANGSMITH_EVALS is disabled, so this run exposes metadata only."
+            )
         if not self.config.langsmith_tracing:
             notes.append(
                 "LANGSMITH_TRACING is disabled, so this run exposes evaluation metadata only."
@@ -96,6 +100,9 @@ class LangSmithEvaluationRecorder:
 def build_evaluation_recorder(
     request: AiOperationRequest, config: AiRuntimeConfig
 ) -> EvaluationRecorder:
-    if request.evaluation.provider == EvaluationProvider.LANGSMITH:
+    if (
+        request.evaluation.provider == EvaluationProvider.LANGSMITH
+        and config.langsmith_enabled
+    ):
         return LangSmithEvaluationRecorder(config)
     return NullEvaluationRecorder()

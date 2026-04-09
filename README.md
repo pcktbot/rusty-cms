@@ -14,9 +14,17 @@ See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewr
 
 Quick start:
 
+- Copy `.env.example` to `.env` and stage your local settings.
 - `cargo test`
 - `cargo run -p cms-api`
 - Open `http://127.0.0.1:4000/viewer` for the temporary server-render preview UI.
+
+Environment loading:
+
+- The Rust API and the Temporal Python runner both auto-load `.env`
+- The API will fail fast if `CMS_REQUIRE_DATABASE=true` and `DATABASE_URL` is missing
+- The Temporal runner will fail fast for invalid AI provider config such as `CMS_AI_PROVIDER=anthropic` without `ANTHROPIC_API_KEY`
+- LangSmith tracing/evals can be gated with `CMS_AI_ENABLE_LANGSMITH`, `CMS_AI_ENABLE_LANGSMITH_TRACING`, and `CMS_AI_ENABLE_LANGSMITH_EVALS`
 
 Useful API routes:
 

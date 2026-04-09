@@ -59,6 +59,9 @@ Useful environment variables:
 - `CMS_AI_VERTEX_PROJECT=...`
 - `CMS_AI_VERTEX_LOCATION=us-central1`
 - `CMS_AI_VERTEX_MODEL=gemini-2.5-flash`
+- `CMS_AI_ENABLE_LANGSMITH=false`
+- `CMS_AI_ENABLE_LANGSMITH_TRACING=false`
+- `CMS_AI_ENABLE_LANGSMITH_EVALS=false`
 - `LANGSMITH_TRACING=true`
 - `LANGSMITH_API_KEY=...`
 - `LANGSMITH_PROJECT=rusty-cms`

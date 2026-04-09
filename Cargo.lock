@@ -277,6 +277,7 @@ dependencies = [
  "cms-registry",
  "cms-render",
  "cms-workflows",
+ "dotenvy",
  "serde",
  "serde_json",
  "tokio",

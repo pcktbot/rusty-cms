@@ -65,7 +65,10 @@ class AnthropicAiProvider:
             ) from exc
 
         client = AsyncAnthropic(api_key=self.config.anthropic_api_key)
-        client = _maybe_wrap_anthropic_client(client, self.config.langsmith_tracing)
+        client = _maybe_wrap_anthropic_client(
+            client,
+            self.config.langsmith_enabled and self.config.langsmith_tracing,
+        )
         message = await client.messages.create(
             model=request.model,
             max_tokens=request.max_tokens,
