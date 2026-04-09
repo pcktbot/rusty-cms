@@ -90,6 +90,39 @@ pub struct WorkflowRequestRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct MigrationJobRow {
+    pub id: Uuid,
+    pub site_id: Uuid,
+    pub workflow_request_id: Uuid,
+    pub workflow_id: String,
+    pub branch_name: String,
+    pub homepage_url: String,
+    pub client_id: Uuid,
+    pub location_id: Uuid,
+    pub legacy_api_profile: Option<String>,
+    pub status: String,
+    pub options: Json<serde_json::Value>,
+    pub warnings: Json<Vec<String>>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct MigrationPageRow {
+    pub id: Uuid,
+    pub migration_job_id: Uuid,
+    pub path: String,
+    pub title_guess: String,
+    pub widget_matches: Json<Vec<String>>,
+    pub unknown_regions: i32,
+    pub confidence: f32,
+    pub warnings: Json<Vec<String>>,
+    pub extraction_notes: Json<Vec<String>>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
 pub struct OutboxEventRow {
     pub id: Uuid,
     pub topic: String,

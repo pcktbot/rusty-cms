@@ -21,7 +21,8 @@ Status legend:
 - `implemented` fallback seeded catalog for local development when no database is configured
 - `implemented` workflow request submit/trigger routes with workflow-request persistence and outbox emission
 - `implemented` local widget source import route for registry inspection
-- `scaffolded` migration create/review/approve routes backed by in-memory records
+- `implemented` migration create/review/approve routes
+- `implemented` Postgres-backed migration job and review artifact persistence when `DATABASE_URL` is configured
 - `scaffolded` widget command route contract
 - `planned` branch CRUD, snapshot CRUD, page CRUD, asset CRUD, theme CRUD
 
@@ -48,7 +49,8 @@ Status legend:
 
 - `implemented` Temporal Python worker with queues for publish, restore, bulk, migrations, and agent ops
 - `implemented` AI workflow runtime wrappers with provider abstraction, retrieval hooks, LangSmith flags, and Anthropic/Vertex adapter seams
-- `implemented` site migration workflow kind, queue, schemas, and worker stub
+- `implemented` site migration workflow kind, queue, schemas, and worker activity
+- `implemented` first crawl/discovery pass for homepage HTML and same-host link extraction
 - `scaffolded` site migration review artifact generation
 - `planned` durable workflow status tracking beyond workflow-request rows
 - `planned` Rust or Bun workflow workers for non-Python tasks
@@ -73,9 +75,8 @@ Status legend:
   - location association
   - crawl and enrichment options
 - `implemented` migration workflow admission and Temporal trigger path
-- `scaffolded` migration review records and page-level review endpoints
-- `scaffolded` site migration worker activity that returns placeholder review output
-- `planned` crawler
+- `implemented` migration review records and page-level review endpoints
+- `implemented` homepage crawler and same-host route discovery
 - `planned` DOM/template classifier
 - `planned` registered-widget signature detection
 - `planned` targeted legacy API enrichment

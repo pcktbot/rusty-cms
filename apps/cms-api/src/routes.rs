@@ -14,7 +14,7 @@ use cms_core::widget::{
     WidgetRuntime, WidgetSourceKind,
 };
 use cms_db::{
-    models::{OutboxEventRow, WorkflowRequestRow},
+    models::{MigrationJobRow, MigrationPageRow, OutboxEventRow, WorkflowRequestRow},
     repositories::PgRepository,
 };
 use cms_registry::importer::{ImportedWidgetPackage, WidgetImportError, WidgetSourceImporter};
@@ -528,11 +528,7 @@ async fn create_migration(
 
     let record =
         migration_record_from_request(site_id, &request, &workflow_request, &result.workflow_id);
-    state
-        .migrations
-        .write()
-        .await
-        .insert(record.id, record.clone());
+    store_migration_record(&state, &record).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -555,17 +551,21 @@ async fn migration_detail(
     Path(migration_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<MigrationJobSummary>, StatusCode> {
-    let migrations = state.migrations.read().await;
-    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(migration_summary(record)))
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(migration_summary(&record)))
 }
 
 async fn migration_pages(
     Path(migration_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<MigrationPageSummary>>, StatusCode> {
-    let migrations = state.migrations.read().await;
-    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(
         record
             .pages
@@ -579,8 +579,10 @@ async fn migration_page_detail(
     Path((migration_id, page_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<MigrationPageDetail>, StatusCode> {
-    let migrations = state.migrations.read().await;
-    let record = migrations.get(&migration_id).ok_or(StatusCode::NOT_FOUND)?;
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let page = record
         .pages
         .iter()
@@ -594,18 +596,30 @@ async fn approve_migration(
     Path(migration_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<MigrationApprovalReceipt>, StatusCode> {
-    let mut migrations = state.migrations.write().await;
-    let record = migrations
-        .get_mut(&migration_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
     let approved_at = OffsetDateTime::now_utc();
-    record.status = MigrationStatus::Approved;
-    record.approved_at = Some(approved_at);
+    let status = if let Some(repository) = state.repository.as_ref() {
+        repository
+            .approve_migration_job(migration_id, approved_at)
+            .await
+            .map_err(internal_db_error)?
+            .map(|row| parse_migration_status(&row.status))
+            .transpose()
+            .map_err(internal_mapping_error)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        let mut migrations = state.migrations.write().await;
+        let record = migrations
+            .get_mut(&migration_id)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        record.status = MigrationStatus::Approved;
+        record.approved_at = Some(approved_at);
+        record.status.clone()
+    };
 
     Ok(Json(MigrationApprovalReceipt {
         approved: true,
         migration_id,
-        status: record.status.clone(),
+        status,
         approved_at,
     }))
 }
@@ -1102,6 +1116,52 @@ fn migration_page_summary(page: &MigrationPageDetail) -> MigrationPageSummary {
     }
 }
 
+async fn store_migration_record(
+    state: &AppState,
+    record: &MigrationJobRecord,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(repository) = state.repository.as_ref() {
+        let job_row = migration_job_row_from_record(record).map_err(json_mapping_error)?;
+        repository
+            .insert_migration_job(&job_row)
+            .await
+            .map_err(json_db_error)?;
+
+        for page in &record.pages {
+            let page_row = migration_page_row_from_detail(record.id, page);
+            repository
+                .insert_migration_page(&page_row)
+                .await
+                .map_err(json_db_error)?;
+        }
+    } else {
+        state
+            .migrations
+            .write()
+            .await
+            .insert(record.id, record.clone());
+    }
+
+    Ok(())
+}
+
+async fn load_migration_record(
+    state: &AppState,
+    migration_id: Uuid,
+) -> Result<Option<MigrationJobRecord>, sqlx::Error> {
+    if let Some(repository) = state.repository.as_ref() {
+        let Some(job_row) = repository.migration_job(migration_id).await? else {
+            return Ok(None);
+        };
+        let page_rows = repository.migration_pages(migration_id).await?;
+        migration_record_from_rows(job_row, page_rows)
+            .map(Some)
+            .map_err(sqlx::Error::Protocol)
+    } else {
+        Ok(state.migrations.read().await.get(&migration_id).cloned())
+    }
+}
+
 fn migration_warnings(request: &CreateMigrationRequest) -> Vec<String> {
     let mut warnings = vec![
         "Migration foundation is scaffolded; crawler, classifier, and importer are pending."
@@ -1128,6 +1188,109 @@ fn homepage_path(homepage_url: &str) -> String {
         }
     }
     "/".to_owned()
+}
+
+fn migration_job_row_from_record(record: &MigrationJobRecord) -> Result<MigrationJobRow, String> {
+    Ok(MigrationJobRow {
+        id: record.id,
+        site_id: record.site_id,
+        workflow_request_id: record.workflow_request_id,
+        workflow_id: record.workflow_id.clone(),
+        branch_name: record.branch_name.clone(),
+        homepage_url: record.homepage_url.clone(),
+        client_id: record.client_id,
+        location_id: record.location_id,
+        legacy_api_profile: record.legacy_api_profile.clone(),
+        status: migration_status_name(&record.status).to_owned(),
+        options: sqlx::types::Json(
+            serde_json::to_value(&record.options).map_err(|error| error.to_string())?,
+        ),
+        warnings: sqlx::types::Json(record.warnings.clone()),
+        created_at: record.created_at,
+        approved_at: record.approved_at,
+    })
+}
+
+fn migration_page_row_from_detail(
+    migration_job_id: Uuid,
+    page: &MigrationPageDetail,
+) -> MigrationPageRow {
+    let now = OffsetDateTime::now_utc();
+    MigrationPageRow {
+        id: page.id,
+        migration_job_id,
+        path: page.path.clone(),
+        title_guess: page.title_guess.clone(),
+        widget_matches: sqlx::types::Json(page.widget_matches.clone()),
+        unknown_regions: page.unknown_regions as i32,
+        confidence: page.confidence,
+        warnings: sqlx::types::Json(page.warnings.clone()),
+        extraction_notes: sqlx::types::Json(page.extraction_notes.clone()),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn migration_record_from_rows(
+    job_row: MigrationJobRow,
+    page_rows: Vec<MigrationPageRow>,
+) -> Result<MigrationJobRecord, String> {
+    Ok(MigrationJobRecord {
+        id: job_row.id,
+        site_id: job_row.site_id,
+        workflow_request_id: job_row.workflow_request_id,
+        workflow_id: job_row.workflow_id,
+        branch_name: job_row.branch_name,
+        homepage_url: job_row.homepage_url,
+        client_id: job_row.client_id,
+        location_id: job_row.location_id,
+        legacy_api_profile: job_row.legacy_api_profile,
+        status: parse_migration_status(&job_row.status)?,
+        options: serde_json::from_value(job_row.options.0).map_err(|error| error.to_string())?,
+        pages: page_rows
+            .into_iter()
+            .map(migration_page_detail_from_row)
+            .collect::<Vec<_>>(),
+        warnings: job_row.warnings.0,
+        created_at: job_row.created_at,
+        approved_at: job_row.approved_at,
+    })
+}
+
+fn migration_page_detail_from_row(row: MigrationPageRow) -> MigrationPageDetail {
+    MigrationPageDetail {
+        id: row.id,
+        path: row.path,
+        title_guess: row.title_guess,
+        widget_matches: row.widget_matches.0,
+        unknown_regions: row.unknown_regions.max(0) as u32,
+        confidence: row.confidence,
+        warnings: row.warnings.0,
+        extraction_notes: row.extraction_notes.0,
+    }
+}
+
+fn migration_status_name(status: &MigrationStatus) -> &'static str {
+    match status {
+        MigrationStatus::Queued => "queued",
+        MigrationStatus::Running => "running",
+        MigrationStatus::ReviewReady => "review_ready",
+        MigrationStatus::Approved => "approved",
+        MigrationStatus::Imported => "imported",
+        MigrationStatus::Failed => "failed",
+    }
+}
+
+fn parse_migration_status(value: &str) -> Result<MigrationStatus, String> {
+    match normalize_name(value).as_str() {
+        "queued" => Ok(MigrationStatus::Queued),
+        "running" => Ok(MigrationStatus::Running),
+        "reviewready" | "review_ready" => Ok(MigrationStatus::ReviewReady),
+        "approved" => Ok(MigrationStatus::Approved),
+        "imported" => Ok(MigrationStatus::Imported),
+        "failed" => Ok(MigrationStatus::Failed),
+        _ => Err(format!("unknown migration status: {value}")),
+    }
 }
 
 async fn ensure_site_exists(
@@ -1380,6 +1543,16 @@ fn json_db_error(error: sqlx::Error) -> (StatusCode, Json<serde_json::Value>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({
             "error": "database query failed"
+        })),
+    )
+}
+
+fn json_mapping_error(error: String) -> (StatusCode, Json<serde_json::Value>) {
+    error!(error = %error, "value mapping failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": "value mapping failed"
         })),
     )
 }

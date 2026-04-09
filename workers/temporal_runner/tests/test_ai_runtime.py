@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -14,7 +15,7 @@ from rusty_cms_temporal.ai.contracts import (
 )
 from rusty_cms_temporal.ai.orchestrator import execute_ai_workflow
 from rusty_cms_temporal.ai.retrieval import build_retriever
-from rusty_cms_temporal.migrations import execute_site_migration
+from rusty_cms_temporal.migrations import discover_pages, execute_site_migration
 
 
 def sample_workflow_request() -> dict:
@@ -105,33 +106,69 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(request.retrieval.documents), 2)
 
     async def test_site_migration_stub_returns_review_ready_shape(self):
-        result = await execute_site_migration(
-            {
-                "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
-                "kind": "SiteMigration",
-                "site_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                "branch_name": "migration/draft",
-                "requested_runtime": "Python",
-                "temporal_queue": "cms-migrations",
-                "input_payload": {
-                    "homepage_url": "https://example.com/floorplans",
-                    "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-                    "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
-                    "options": {
-                        "detect_registered_widgets": True,
-                        "use_legacy_api_enrichment": True,
+        html = """
+        <html>
+          <head>
+            <title>Example Property</title>
+          </head>
+          <body>
+            <div class="hero-banner">Hero</div>
+            <nav>
+              <a href="/floorplans">Floor Plans</a>
+              <a href="/amenities">Amenities</a>
+            </nav>
+            <script src="/assets/hero-banner.js"></script>
+          </body>
+        </html>
+        """
+        with patch("rusty_cms_temporal.migrations.fetch_html", return_value=html):
+            result = await execute_site_migration(
+                {
+                    "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                    "kind": "SiteMigration",
+                    "site_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "branch_name": "migration/draft",
+                    "requested_runtime": "Python",
+                    "temporal_queue": "cms-migrations",
+                    "input_payload": {
+                        "homepage_url": "https://example.com/floorplans",
+                        "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                        "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                        "options": {
+                            "detect_registered_widgets": True,
+                            "use_legacy_api_enrichment": True,
+                        },
                     },
-                },
-            }
-        )
+                }
+            )
 
         self.assertTrue(result["accepted"])
         self.assertEqual(result["migration"]["status"], "review_ready")
         self.assertEqual(result["migration"]["pages"][0]["path"], "/floorplans")
         self.assertIn(
-            "registry-detection-pending",
+            "hero-banner",
             result["migration"]["pages"][0]["widget_matches"],
         )
+
+    def test_discover_pages_extracts_internal_links_and_widget_signals(self):
+        html = """
+        <html>
+          <head>
+            <title>Hearth Apartments</title>
+          </head>
+          <body>
+            <section data-widget="floor-plans-plus"></section>
+            <a href="/floor-plans">Floor Plans</a>
+            <a href="https://example.com/amenities">Amenities</a>
+          </body>
+        </html>
+        """
+
+        pages = discover_pages("https://example.com/", html, detect_widgets=True)
+
+        self.assertEqual(pages[0].title_guess, "Hearth Apartments")
+        self.assertIn("floor-plans-plus", pages[0].widget_matches)
+        self.assertEqual(pages[1].path, "/floor-plans")
 
 
 if __name__ == "__main__":
