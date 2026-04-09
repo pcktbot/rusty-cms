@@ -1,12 +1,7 @@
 use cms_core::widget::{HtmlSupportMode, WidgetRuntime, WidgetSourceKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-    process::Command,
-};
+use std::{collections::HashMap, fs, path::Path, process::Command};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -8,8 +8,15 @@ use axum::{
     routing::{get, post},
 };
 use cms_core::health::HealthStatus;
-use cms_core::site::SiteSnapshotRef;
-use cms_core::widget::{WidgetCommand, WidgetDefinitionRef};
+use cms_core::site::{SiteKind, SiteSnapshotRef};
+use cms_core::widget::{
+    HtmlSupportMode, WidgetCommand, WidgetDefinition, WidgetDefinitionRef, WidgetDefinitionVersion,
+    WidgetRuntime, WidgetSourceKind,
+};
+use cms_db::{
+    models::{OutboxEventRow, WorkflowRequestRow},
+    repositories::PgRepository,
+};
 use cms_registry::importer::{ImportedWidgetPackage, WidgetImportError, WidgetSourceImporter};
 use cms_render::RenderEngine;
 use cms_workflows::{
@@ -18,8 +25,10 @@ use cms_workflows::{
 };
 use serde::{Deserialize, Serialize};
 use std::{process::Stdio, sync::Arc};
+use time::OffsetDateTime;
 use tokio::{io::AsyncWriteExt, process::Command};
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -28,6 +37,7 @@ pub struct AppState {
     pub renderer: RenderEngine,
     pub workflows: WorkflowRuntimeMatrix,
     pub catalog: Arc<ApiCatalog>,
+    pub repository: Option<PgRepository>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,7 +51,7 @@ struct RuntimeInfoResponse {
 struct BranchHeadResponse {
     site_id: Uuid,
     branch_name: String,
-    snapshot_id: Uuid,
+    snapshot_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -155,15 +165,43 @@ async fn runtime_info(State(state): State<AppState>) -> Json<RuntimeInfoResponse
     })
 }
 
-async fn sites(State(state): State<AppState>) -> Json<Vec<SiteSummary>> {
-    Json(state.catalog.sites().to_vec())
+async fn sites(State(state): State<AppState>) -> Result<Json<Vec<SiteSummary>>, StatusCode> {
+    if let Some(repository) = state.repository.as_ref() {
+        let rows = repository.list_sites().await.map_err(internal_db_error)?;
+        let sites = rows
+            .into_iter()
+            .map(site_summary_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal_mapping_error)?;
+        Ok(Json(sites))
+    } else {
+        Ok(Json(state.catalog.sites().to_vec()))
+    }
 }
 
 async fn site_branches(
     Path(site_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BranchSummary>>, StatusCode> {
-    if state.catalog.sites().iter().any(|site| site.id == site_id) {
+    if let Some(repository) = state.repository.as_ref() {
+        if !repository
+            .site_exists(site_id)
+            .await
+            .map_err(internal_db_error)?
+        {
+            return Err(StatusCode::NOT_FOUND);
+        }
+
+        let rows = repository
+            .list_branches_for_site(site_id)
+            .await
+            .map_err(internal_db_error)?;
+        let branches = rows
+            .into_iter()
+            .map(branch_summary_from_row)
+            .collect::<Vec<_>>();
+        Ok(Json(branches))
+    } else if state.catalog.sites().iter().any(|site| site.id == site_id) {
         Ok(Json(state.catalog.branches_for_site(site_id).to_vec()))
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -174,10 +212,20 @@ async fn branch_head(
     Path((site_id, branch_name)): Path<(Uuid, String)>,
     State(state): State<AppState>,
 ) -> Result<Json<BranchHeadResponse>, StatusCode> {
-    let branch = state
-        .catalog
-        .branch_head(site_id, &branch_name)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let branch = if let Some(repository) = state.repository.as_ref() {
+        repository
+            .branch_head(site_id, &branch_name)
+            .await
+            .map_err(internal_db_error)?
+            .map(branch_summary_from_row)
+            .ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        state
+            .catalog
+            .branch_head(site_id, &branch_name)
+            .cloned()
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
 
     Ok(Json(BranchHeadResponse {
         site_id,
@@ -220,6 +268,10 @@ async fn submit_workflow_request(
         )
     })?;
 
+    ensure_site_exists(&state, site_id).await?;
+    upsert_workflow_request(&state, &request).await?;
+    emit_workflow_event(&state, &request, "workflow.requested", None).await?;
+
     Ok((
         StatusCode::ACCEPTED,
         Json(WorkflowSubmissionReceipt {
@@ -257,6 +309,9 @@ async fn trigger_workflow_request(
         )
     })?;
 
+    ensure_site_exists(&state, site_id).await?;
+    upsert_workflow_request(&state, &request).await?;
+
     let result = start_temporal_workflow(&state.config, &request)
         .await
         .map_err(|error| {
@@ -267,6 +322,18 @@ async fn trigger_workflow_request(
                 })),
             )
         })?;
+    emit_workflow_event(
+        &state,
+        &request,
+        "workflow.started",
+        Some(serde_json::json!({
+            "workflow_id": result.workflow_id,
+            "run_id": result.run_id,
+            "namespace": result.namespace,
+            "task_queue": result.task_queue,
+        })),
+    )
+    .await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -284,31 +351,77 @@ async fn trigger_workflow_request(
 
 async fn widget_definitions(
     State(state): State<AppState>,
-) -> Json<Vec<cms_core::widget::WidgetDefinition>> {
-    Json(state.catalog.widget_definitions().to_vec())
+) -> Result<Json<Vec<WidgetDefinition>>, StatusCode> {
+    if let Some(repository) = state.repository.as_ref() {
+        let rows = repository
+            .list_widget_definitions()
+            .await
+            .map_err(internal_db_error)?;
+        let definitions = rows
+            .into_iter()
+            .map(widget_definition_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal_mapping_error)?;
+        Ok(Json(definitions))
+    } else {
+        Ok(Json(state.catalog.widget_definitions().to_vec()))
+    }
 }
 
 async fn widget_definition_detail(
     Path(slug): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<cms_core::widget::WidgetDefinition>, StatusCode> {
-    state
-        .catalog
-        .widget_definition(&slug)
-        .cloned()
-        .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+) -> Result<Json<WidgetDefinition>, StatusCode> {
+    if let Some(repository) = state.repository.as_ref() {
+        let row = repository
+            .widget_definition_by_slug(&slug)
+            .await
+            .map_err(internal_db_error)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        widget_definition_from_row(row)
+            .map(Json)
+            .map_err(internal_mapping_error)
+    } else {
+        state
+            .catalog
+            .widget_definition(&slug)
+            .cloned()
+            .map(Json)
+            .ok_or(StatusCode::NOT_FOUND)
+    }
 }
 
 async fn widget_definition_versions(
     Path(slug): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<cms_core::widget::WidgetDefinitionVersion>>, StatusCode> {
-    if state.catalog.widget_definition(&slug).is_none() {
-        return Err(StatusCode::NOT_FOUND);
-    }
+) -> Result<Json<Vec<WidgetDefinitionVersion>>, StatusCode> {
+    if let Some(repository) = state.repository.as_ref() {
+        if repository
+            .widget_definition_by_slug(&slug)
+            .await
+            .map_err(internal_db_error)?
+            .is_none()
+        {
+            return Err(StatusCode::NOT_FOUND);
+        }
 
-    Ok(Json(state.catalog.widget_versions(&slug).to_vec()))
+        let rows = repository
+            .list_widget_definition_versions(&slug)
+            .await
+            .map_err(internal_db_error)?;
+        let versions = rows
+            .into_iter()
+            .map(widget_definition_version_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal_mapping_error)?;
+        Ok(Json(versions))
+    } else {
+        if state.catalog.widget_definition(&slug).is_none() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+
+        Ok(Json(state.catalog.widget_versions(&slug).to_vec()))
+    }
 }
 
 async fn import_local_widget_source(
@@ -601,6 +714,104 @@ fn sample_workflow_request(state: &AppState) -> WorkflowRequest {
     }
 }
 
+async fn ensure_site_exists(
+    state: &AppState,
+    site_id: Uuid,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(repository) = state.repository.as_ref() {
+        let exists = repository
+            .site_exists(site_id)
+            .await
+            .map_err(json_db_error)?;
+        if !exists {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("site {site_id} was not found")
+                })),
+            ));
+        }
+    } else if !state.catalog.sites().iter().any(|site| site.id == site_id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("site {site_id} was not found")
+            })),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn upsert_workflow_request(
+    state: &AppState,
+    request: &WorkflowRequest,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let Some(repository) = state.repository.as_ref() else {
+        return Ok(());
+    };
+
+    let now = OffsetDateTime::now_utc();
+    let request_row = WorkflowRequestRow {
+        id: request.id,
+        site_id: request.site_id,
+        branch_name: request.branch_name.clone(),
+        workflow_kind: workflow_kind_name(request.kind).to_owned(),
+        requested_runtime: agent_runtime_name(request.requested_runtime).to_owned(),
+        temporal_queue: request.temporal_queue.clone(),
+        input_payload: sqlx::types::Json(request.input_payload.clone()),
+        output_schema: request.artifact_contract.output_schema.clone(),
+        requires_human_approval: request.safety_policy.requires_human_approval,
+        max_sites_touched: request.safety_policy.max_sites_touched as i32,
+        allow_publish_side_effects: request.safety_policy.allow_publish_side_effects,
+        created_at: now,
+    };
+    repository
+        .insert_workflow_request(&request_row)
+        .await
+        .map_err(json_db_error)?;
+
+    Ok(())
+}
+
+async fn emit_workflow_event(
+    state: &AppState,
+    request: &WorkflowRequest,
+    topic: &str,
+    extra_payload: Option<serde_json::Value>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let Some(repository) = state.repository.as_ref() else {
+        return Ok(());
+    };
+
+    let now = OffsetDateTime::now_utc();
+    let outbox_row = OutboxEventRow {
+        id: Uuid::new_v4(),
+        topic: topic.to_owned(),
+        event_key: request.id.to_string(),
+        payload: sqlx::types::Json(merge_json(
+            serde_json::json!({
+            "workflow_request_id": request.id,
+            "site_id": request.site_id,
+            "branch_name": request.branch_name,
+            "workflow_kind": workflow_kind_name(request.kind),
+            "requested_runtime": agent_runtime_name(request.requested_runtime),
+            "temporal_queue": request.temporal_queue,
+            }),
+            extra_payload,
+        )),
+        available_at: now,
+        published_at: None,
+        created_at: now,
+    };
+    repository
+        .insert_outbox_event(&outbox_row)
+        .await
+        .map_err(json_db_error)?;
+
+    Ok(())
+}
+
 fn import_error_response(error: WidgetImportError) -> (StatusCode, Json<serde_json::Value>) {
     let status = match error {
         WidgetImportError::PathMissing(_) | WidgetImportError::RequiredFileMissing(_) => {
@@ -617,6 +828,148 @@ fn import_error_response(error: WidgetImportError) -> (StatusCode, Json<serde_js
             "error": error.to_string()
         })),
     )
+}
+
+fn site_summary_from_row(row: cms_db::models::SiteRow) -> Result<SiteSummary, String> {
+    Ok(SiteSummary {
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        primary_host: row.primary_host,
+        site_kind: parse_site_kind(&row.site_kind)?,
+        source_template_site_id: row.source_template_site_id,
+    })
+}
+
+fn branch_summary_from_row(row: cms_db::models::BranchRow) -> BranchSummary {
+    BranchSummary {
+        site_id: row.site_id,
+        name: row.name,
+        head_snapshot_id: row.head_snapshot_id,
+    }
+}
+
+fn widget_definition_from_row(
+    row: cms_db::models::WidgetDefinitionRow,
+) -> Result<WidgetDefinition, String> {
+    Ok(WidgetDefinition {
+        id: row.id,
+        slug: row.slug,
+        display_name: row.display_name,
+        source_kind: parse_widget_source_kind(&row.source_kind)?,
+        component_source_id: row.component_source_id,
+        description: row.description,
+        is_primitive: row.is_primitive,
+    })
+}
+
+fn widget_definition_version_from_row(
+    row: cms_db::models::WidgetDefinitionVersionRow,
+) -> Result<WidgetDefinitionVersion, String> {
+    Ok(WidgetDefinitionVersion {
+        id: row.id,
+        definition_id: row.widget_definition_id,
+        version: row.version,
+        runtime: parse_widget_runtime(&row.runtime)?,
+        html_support_mode: parse_html_support_mode(&row.html_support_mode)?,
+        settings_schema: row.settings_schema.0,
+        editor_schema: row.editor_schema.0,
+        asset_manifest: row.asset_manifest.0,
+        supports_server_render: row.supports_server_render,
+    })
+}
+
+fn parse_site_kind(value: &str) -> Result<SiteKind, String> {
+    match normalize_name(value).as_str() {
+        "standard" => Ok(SiteKind::Standard),
+        "template" => Ok(SiteKind::Template),
+        _ => Err(format!("unknown site kind: {value}")),
+    }
+}
+
+fn parse_widget_source_kind(value: &str) -> Result<WidgetSourceKind, String> {
+    match normalize_name(value).as_str() {
+        "builtin" => Ok(WidgetSourceKind::Builtin),
+        "registryrepo" | "registry_repo" => Ok(WidgetSourceKind::RegistryRepo),
+        _ => Err(format!("unknown widget source kind: {value}")),
+    }
+}
+
+fn parse_widget_runtime(value: &str) -> Result<WidgetRuntime, String> {
+    match normalize_name(value).as_str() {
+        "servertemplate" | "server_template" => Ok(WidgetRuntime::ServerTemplate),
+        "svelte" => Ok(WidgetRuntime::Svelte),
+        "react" => Ok(WidgetRuntime::React),
+        "vue" => Ok(WidgetRuntime::Vue),
+        "webcomponent" | "web_component" => Ok(WidgetRuntime::WebComponent),
+        "rawjavascript" | "raw_javascript" => Ok(WidgetRuntime::RawJavascript),
+        _ => Err(format!("unknown widget runtime: {value}")),
+    }
+}
+
+fn parse_html_support_mode(value: &str) -> Result<HtmlSupportMode, String> {
+    match normalize_name(value).as_str() {
+        "none" => Ok(HtmlSupportMode::None),
+        "sanitizedfragment" | "sanitized_fragment" => Ok(HtmlSupportMode::SanitizedFragment),
+        "trustedfragment" | "trusted_fragment" => Ok(HtmlSupportMode::TrustedFragment),
+        _ => Err(format!("unknown html support mode: {value}")),
+    }
+}
+
+fn normalize_name(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|character| *character != '-' && !character.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn merge_json(base: serde_json::Value, extra: Option<serde_json::Value>) -> serde_json::Value {
+    match (base, extra) {
+        (serde_json::Value::Object(mut base_map), Some(serde_json::Value::Object(extra_map))) => {
+            base_map.extend(extra_map);
+            serde_json::Value::Object(base_map)
+        }
+        (base_value, _) => base_value,
+    }
+}
+
+fn workflow_kind_name(kind: WorkflowKind) -> &'static str {
+    match kind {
+        WorkflowKind::SitePublish => "site_publish",
+        WorkflowKind::RestoreSnapshot => "restore_snapshot",
+        WorkflowKind::BulkApplySnapshot => "bulk_apply_snapshot",
+        WorkflowKind::AiContentOperation => "ai_content_operation",
+    }
+}
+
+fn agent_runtime_name(runtime: AgentRuntime) -> &'static str {
+    match runtime {
+        AgentRuntime::Rust => "rust",
+        AgentRuntime::BunTypescript => "bun_typescript",
+        AgentRuntime::Python => "python",
+    }
+}
+
+fn internal_db_error(error: sqlx::Error) -> StatusCode {
+    error!(error = %error, "database query failed");
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn json_db_error(error: sqlx::Error) -> (StatusCode, Json<serde_json::Value>) {
+    error!(error = %error, "database query failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({
+            "error": "database query failed"
+        })),
+    )
+}
+
+fn internal_mapping_error(error: String) -> StatusCode {
+    error!(error = %error, "database value mapping failed");
+    StatusCode::INTERNAL_SERVER_ERROR
 }
 
 fn sample_widget_command() -> WidgetCommand {
@@ -698,6 +1051,7 @@ mod tests {
             renderer: RenderEngine,
             workflows: WorkflowRuntimeMatrix::default(),
             catalog: Arc::new(ApiCatalog::default()),
+            repository: None,
         }
     }
 

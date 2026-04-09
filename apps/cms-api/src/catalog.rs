@@ -20,7 +20,7 @@ pub struct SiteSummary {
 pub struct BranchSummary {
     pub site_id: Uuid,
     pub name: String,
-    pub head_snapshot_id: Uuid,
+    pub head_snapshot_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,14 +62,16 @@ impl Default for ApiCatalog {
                     BranchSummary {
                         site_id: template_site_id,
                         name: "draft".to_owned(),
-                        head_snapshot_id: Uuid::parse_str("11111111-1111-1111-1111-111111111111")
-                            .unwrap(),
+                        head_snapshot_id: Some(
+                            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                        ),
                     },
                     BranchSummary {
                         site_id: template_site_id,
                         name: "production".to_owned(),
-                        head_snapshot_id: Uuid::parse_str("22222222-2222-2222-2222-222222222222")
-                            .unwrap(),
+                        head_snapshot_id: Some(
+                            Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap(),
+                        ),
                     },
                 ],
             ),
@@ -79,14 +81,16 @@ impl Default for ApiCatalog {
                     BranchSummary {
                         site_id: derived_site_id,
                         name: "draft".to_owned(),
-                        head_snapshot_id: Uuid::parse_str("33333333-3333-3333-3333-333333333333")
-                            .unwrap(),
+                        head_snapshot_id: Some(
+                            Uuid::parse_str("33333333-3333-3333-3333-333333333333").unwrap(),
+                        ),
                     },
                     BranchSummary {
                         site_id: derived_site_id,
                         name: "production".to_owned(),
-                        head_snapshot_id: Uuid::parse_str("44444444-4444-4444-4444-444444444444")
-                            .unwrap(),
+                        head_snapshot_id: Some(
+                            Uuid::parse_str("44444444-4444-4444-4444-444444444444").unwrap(),
+                        ),
                     },
                 ],
             ),
