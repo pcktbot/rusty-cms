@@ -54,6 +54,15 @@
             "failed"
           ]
         },
+        "action": {
+          "type": "string"
+        },
+        "migration_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "homepage_url": {
           "type": "string",
           "format": "uri"

@@ -388,6 +388,39 @@ impl PgRepository {
         .await
     }
 
+    pub async fn update_migration_page(
+        &self,
+        row: &MigrationPageRow,
+    ) -> Result<Option<MigrationPageRow>, sqlx::Error> {
+        query_as::<_, MigrationPageRow>(
+            r#"
+            UPDATE migration_pages
+            SET path = $2,
+                title_guess = $3,
+                widget_matches = $4,
+                unknown_regions = $5,
+                confidence = $6,
+                warnings = $7,
+                extraction_notes = $8,
+                updated_at = $9
+            WHERE id = $1
+            RETURNING id, migration_job_id, path, title_guess, widget_matches, unknown_regions,
+                      confidence, warnings, extraction_notes, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(&row.path)
+        .bind(&row.title_guess)
+        .bind(&row.widget_matches)
+        .bind(row.unknown_regions)
+        .bind(row.confidence)
+        .bind(&row.warnings)
+        .bind(&row.extraction_notes)
+        .bind(row.updated_at)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     pub async fn upsert_migration_page_artifact(
         &self,
         row: &MigrationPageArtifactRow,

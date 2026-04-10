@@ -21,6 +21,7 @@ from rusty_cms_temporal.migrations import (
     build_ssl_context,
     crawl_page,
     discover_paths,
+    extract_page_document_candidate,
     execute_site_migration,
 )
 
@@ -197,6 +198,65 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["migration"]["pages"][1]["images"])
         self.assertTrue(result["migration"]["pages"][1]["media_text_regions"])
 
+    async def test_site_migration_can_run_page_document_extraction_action(self):
+        html = """
+        <html>
+          <head><title>Floor Plans</title></head>
+          <body>
+            <main>
+              <div id="drop-target-aside-before-main">
+                <section class="feature-row image-right">
+                  <img src="/images/lounge.jpg" alt="Resident lounge seating" />
+                  <h2>Made for gathering</h2>
+                  <p>Comfortable shared spaces and natural light throughout.</p>
+                </section>
+              </div>
+            </main>
+          </body>
+        </html>
+        """
+
+        with patch(
+            "rusty_cms_temporal.migrations.fetch_html",
+            return_value=FetchResult(
+                source_url="https://example.com/floorplans",
+                final_url="https://example.com/floorplans",
+                http_status=200,
+                content_type="text/html",
+                html=html,
+            ),
+        ):
+            result = await execute_site_migration(
+                {
+                    "id": "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+                    "kind": "SiteMigration",
+                    "site_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "branch_name": "migration/draft",
+                    "requested_runtime": "Python",
+                    "temporal_queue": "cms-migrations",
+                    "input_payload": {
+                        "action": "extract_page_documents",
+                        "migration_job_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "homepage_url": "https://example.com/",
+                        "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                        "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                        "pages": [
+                            {
+                                "path": "/floorplans",
+                                "source_url": "https://example.com/floorplans",
+                                "title_guess": "Floor Plans",
+                                "widget_matches": [],
+                            }
+                        ],
+                    },
+                }
+            )
+
+        self.assertEqual(result["migration"]["action"], "extract_page_documents")
+        page = result["migration"]["pages"][0]
+        blocks = page["document_candidate"]["regions"]["main"]
+        self.assertTrue(any(block["primitive_type"] == "media_text" for block in blocks))
+
     def test_discovery_extracts_internal_links_and_widget_signals(self):
         html = """
         <html>
@@ -285,6 +345,44 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(block["kind"] == "media_text" for block in page.document_candidate["regions"]["main"])
         )
+
+    def test_extract_page_document_candidate_flattens_before_main_wrappers(self):
+        html = """
+        <html>
+          <head><title>Features</title></head>
+          <body>
+            <main>
+              <aside id="drop-target-aside-before-main">
+                <div class="feature-row">
+                  <img src="/images/pool.jpg" alt="Pool deck" />
+                  <h2>Spaces to unwind</h2>
+                  <p>Sunny seating and resort-inspired details.</p>
+                </div>
+              </aside>
+            </main>
+          </body>
+        </html>
+        """
+        with patch(
+            "rusty_cms_temporal.migrations.fetch_html",
+            return_value=FetchResult(
+                source_url="https://example.com/features",
+                final_url="https://example.com/features",
+                http_status=200,
+                content_type="text/html",
+                html=html,
+            ),
+        ):
+            page = extract_page_document_candidate(
+                "/features",
+                "https://example.com/features",
+                "Features",
+                [],
+            )
+
+        self.assertTrue(page.layout["regions"])
+        self.assertEqual(page.layout["regions"][0]["kind"], "feature")
+        self.assertTrue(page.document_candidate["regions"]["main"])
 
     def test_build_ssl_context_can_disable_verification(self):
         with patch.dict(

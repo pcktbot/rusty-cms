@@ -54,7 +54,9 @@ Status legend:
 - `implemented` AI workflow runtime wrappers with provider abstraction, retrieval hooks, LangSmith flags, and Anthropic/Vertex adapter seams
 - `implemented` site migration workflow kind, queue, schemas, and worker activity
 - `implemented` crawl/discovery pass for homepage and discovered same-host pages
+- `implemented` separate page-document extraction action for migration workflows
 - `implemented` first-pass SEO extraction, schema discovery, layout summaries, and document candidates in the migration worker
+- `implemented` ordered main-content extraction with wrapper suppression for deeper page-document candidates
 - `implemented` site migration review artifact generation with persisted page artifacts
 - `planned` durable workflow status tracking beyond workflow-request rows
 - `planned` Rust or Bun workflow workers for non-Python tasks
@@ -81,9 +83,10 @@ Status legend:
 - `implemented` migration workflow admission and Temporal trigger path
 - `implemented` migration review records and page-level review endpoints
 - `implemented` homepage crawler and same-host route discovery
+- `implemented` explicit extraction trigger and sync routes for deeper page-document generation
 - `implemented` persisted migration page artifacts with SEO, schema, layout, text, and provisional document candidates
 - `implemented` migration-to-draft import route that creates draft change sets from persisted discovery artifacts
-- `scaffolded` DOM/template classifier with first-pass layout region detection
+- `scaffolded` DOM/template classifier with separate discovery and extraction stages
 - `planned` registered-widget signature detection
 - `planned` targeted legacy API enrichment
 - `scaffolded` draft snapshot importer via provisional page-shell changes and document candidates
@@ -182,7 +185,7 @@ Reference: [`docs/site-building-model.md`](/Users/david.miller/Documents/current
 
 ## Immediate next steps
 
-1. Replace provisional `document_candidate` JSON generation with richer stable page-document generation during migration import.
+1. Push extracted page-document candidates all the way into import so the preview reflects deeper extraction by default.
 2. Add template-definition seed data and read routes so page documents can bind to real templates instead of a fallback template key.
 3. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
 4. Replace widget-command stubs with real draft block mutations on top of selected base snapshots.

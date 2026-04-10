@@ -10,9 +10,23 @@
     "options"
   ],
   "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "discover_site",
+        "extract_page_documents"
+      ]
+    },
     "homepage_url": {
       "type": "string",
       "format": "uri"
+    },
+    "migration_job_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
     },
     "client_id": {
       "type": "string",
@@ -27,6 +41,43 @@
         "string",
         "null"
       ]
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "source_url"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "final_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_guess": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "widget_matches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "options": {
       "type": "object",

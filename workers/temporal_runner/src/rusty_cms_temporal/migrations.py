@@ -13,9 +13,12 @@ from rusty_cms_temporal.env import env_flag, optional_env
 
 
 USER_AGENT = "rusty-cms-migrator/0.1"
+DISCOVER_SITE_ACTION = "discover_site"
+EXTRACT_PAGE_DOCUMENTS_ACTION = "extract_page_documents"
 INTERESTING_LAYOUT_TAGS = {"header", "main", "section", "article", "aside", "nav", "footer", "form"}
 LAYOUT_KEYWORDS = {
     "hero": "hero",
+    "feature": "feature",
     "row": "row",
     "column": "column",
     "col-": "column",
@@ -28,6 +31,16 @@ LAYOUT_KEYWORDS = {
     "gallery": "media",
     "amenit": "grid",
     "card": "grid",
+}
+MAIN_REGION_TAGS = {"section", "article", "aside", "div", "form"}
+WRAPPER_KEYWORDS = {
+    "drop-target",
+    "before-main",
+    "after-main",
+    "breadcrumb",
+    "masthead",
+    "page-shell",
+    "content-shell",
 }
 
 
@@ -261,6 +274,110 @@ class PageParser(HTMLParser):
         }
         return image
 
+
+class MainContentParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._inside_main = False
+        self._stack: list[dict[str, Any]] = []
+        self._regions: list[dict[str, Any]] = []
+        self._region_counter = 0
+
+    @property
+    def regions(self) -> list[dict[str, Any]]:
+        return self._regions
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_map = {key: value or "" for key, value in attrs}
+        class_names = attrs_map.get("class", "")
+        element_id = attrs_map.get("id", "")
+
+        if tag == "main" and not self._inside_main:
+            self._inside_main = True
+            self._stack.append({"tag": tag, "wrapper": False, "region_index": None})
+            return
+
+        if not self._inside_main:
+            return
+
+        parent_region_index = self._current_region_index()
+        wrapper = is_wrapper_container(tag, class_names, element_id)
+        region_index = parent_region_index
+
+        if (
+            region_index is None
+            and not wrapper
+            and tag in MAIN_REGION_TAGS
+        ):
+            region_index = self._start_region(tag, class_names, element_id)
+
+        if tag == "img" and region_index is not None:
+            image = {
+                "src": attrs_map.get("src", "").strip(),
+                "alt": attrs_map.get("alt", "").strip() or None,
+                "title": attrs_map.get("title", "").strip() or None,
+                "selector_hint": build_selector_hint(tag, class_names, element_id),
+                "role_hint": infer_role_hint(f"{class_names} {element_id}"),
+            }
+            if image["src"]:
+                self._regions[region_index]["images"].append(image)
+
+        self._stack.append(
+            {
+                "tag": tag,
+                "wrapper": wrapper,
+                "region_index": region_index,
+            }
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._inside_main:
+            return
+
+        if self._stack:
+            self._stack.pop()
+
+        if tag == "main":
+            self._inside_main = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._inside_main:
+            return
+
+        region_index = self._current_region_index()
+        if region_index is None:
+            return
+
+        text = normalize_text(data)
+        if not text:
+            return
+
+        region = self._regions[region_index]
+        region["text_parts"].append(text)
+        if region["heading"] is None and len(text) <= 120:
+            region["heading"] = text
+
+    def _start_region(self, tag: str, class_names: str, element_id: str) -> int:
+        selector_hint = build_selector_hint(tag, class_names, element_id)
+        kind = classify_main_region(tag, class_names, element_id)
+        region = {
+            "id": f"main_region_{self._region_counter + 1}",
+            "kind": kind,
+            "selector_hint": selector_hint,
+            "images": [],
+            "text_parts": [],
+            "heading": None,
+        }
+        self._region_counter += 1
+        self._regions.append(region)
+        return len(self._regions) - 1
+
+    def _current_region_index(self) -> int | None:
+        for node in reversed(self._stack):
+            if node["region_index"] is not None:
+                return int(node["region_index"])
+        return None
+
 def normalize_text(value: str) -> str:
     return " ".join(value.split()).strip()
 
@@ -300,6 +417,22 @@ def infer_role_hint(value: str) -> str | None:
         if keyword in lowered:
             return role
     return None
+
+
+def is_wrapper_container(tag: str, class_names: str, element_id: str) -> bool:
+    if tag not in MAIN_REGION_TAGS:
+        return False
+
+    lowered = f"{class_names} {element_id}".lower()
+    return any(keyword in lowered for keyword in WRAPPER_KEYWORDS)
+
+
+def classify_main_region(tag: str, class_names: str, element_id: str) -> str:
+    lowered = f"{tag} {class_names} {element_id}".lower()
+    for keyword, mapped_kind in LAYOUT_KEYWORDS.items():
+        if keyword in lowered:
+            return mapped_kind
+    return tag
 
 
 def parse_int(value: str | None) -> int | None:
@@ -422,6 +555,177 @@ def crawl_page(path: str, page_url: str, detect_widgets: bool) -> CrawledPageArt
         },
         schema_types=schema_types,
         layout=layout,
+        text_blocks=text_blocks,
+        images=images,
+        media_text_regions=media_text_regions,
+        html_excerpt=html_excerpt,
+        document_candidate=document_candidate,
+        internal_links=[path for path, _anchor_text in unique_links(parser.internal_links)[:24]],
+        asset_urls=sorted(set(parser.asset_urls))[:32],
+    )
+
+
+def extract_main_regions(html: str) -> list[dict[str, Any]]:
+    parser = MainContentParser()
+    parser.feed(html)
+
+    regions: list[dict[str, Any]] = []
+    for region in parser.regions:
+        text_parts = region.get("text_parts", [])
+        heading = region.get("heading")
+        body_candidates = [part for part in text_parts if part != heading]
+        body = " ".join(body_candidates[:3]) if body_candidates else (text_parts[0] if text_parts else "")
+        cleaned = {
+            "id": region["id"],
+            "kind": region["kind"],
+            "selector_hint": region["selector_hint"],
+            "heading": heading,
+            "body": body,
+            "images": region.get("images", [])[:4],
+        }
+        if cleaned["heading"] or cleaned["body"] or cleaned["images"]:
+            regions.append(cleaned)
+    return regions[:18]
+
+
+def build_document_candidate_from_main_regions(
+    title: str,
+    main_regions: list[dict[str, Any]],
+    widget_matches: list[str],
+) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = []
+
+    for region in main_regions:
+        images = region.get("images") or []
+        heading = region.get("heading")
+        body = region.get("body")
+        selector_hint = region.get("selector_hint")
+        kind = region.get("kind")
+
+        if images and (heading or body):
+            blocks.append(
+                {
+                    "kind": "primitive",
+                    "primitive_type": "media_text",
+                    "selector_hint": selector_hint,
+                    "content": {
+                        "heading": heading,
+                        "body": body,
+                        "image": images[0],
+                    },
+                }
+            )
+            continue
+
+        if images:
+            blocks.append(
+                {
+                    "kind": "primitive",
+                    "primitive_type": "image",
+                    "selector_hint": selector_hint,
+                    "content": images[0],
+                }
+            )
+
+        if heading or body:
+            blocks.append(
+                {
+                    "kind": "primitive",
+                    "primitive_type": "rich_text",
+                    "selector_hint": selector_hint,
+                    "content": {
+                        "heading": heading,
+                        "text": body or heading,
+                        "region_kind": kind,
+                    },
+                }
+            )
+
+    for widget_slug in widget_matches:
+        blocks.append(
+            {
+                "kind": "widget",
+                "widget_slug": widget_slug,
+                "settings": {"migration_detected": True},
+            }
+        )
+
+    return {
+        "title": title,
+        "regions": {
+            "main": blocks[:18],
+        },
+    }
+
+
+def extract_page_document_candidate(
+    path: str,
+    page_url: str,
+    title_guess: str,
+    widget_matches: list[str],
+) -> CrawledPageArtifact:
+    warnings: list[str] = []
+    extraction_notes: list[str] = []
+    fetch = fetch_html(page_url)
+    parser = PageParser(fetch.final_url)
+    parser.feed(fetch.html)
+
+    title_guess = normalize_text(" ".join(parser.title_parts)) or normalize_text(
+        " ".join(parser.h1_parts)
+    ) or title_guess
+    schema_types = sorted(extract_schema_types(parser.schema_graph_raw))
+    layout = {
+        "regions": parser.layout_regions[:24],
+        "counts": summarize_layout_counts(parser.layout_regions),
+    }
+    text_blocks = parser.text_blocks[:12]
+    images = parser.images[:16]
+    media_text_regions = infer_media_text_regions(layout["regions"], images, text_blocks)[:12]
+    html_excerpt = extract_html_excerpt(fetch.html)
+    main_regions = extract_main_regions(fetch.html)
+    document_candidate = build_document_candidate_from_main_regions(
+        title_guess,
+        main_regions,
+        sorted(parser.widget_signals),
+    )
+
+    extraction_notes.append(
+        f"page-document extraction walked {len(main_regions)} ordered main-content regions"
+    )
+    if main_regions:
+        extraction_notes.append(
+            "main regions: " + ", ".join(region["kind"] for region in main_regions[:8])
+        )
+    else:
+        extraction_notes.append("no ordered main-content regions found; falling back to discovery summary")
+
+    return CrawledPageArtifact(
+        path=path,
+        source_url=page_url,
+        final_url=fetch.final_url,
+        http_status=fetch.http_status,
+        content_type=fetch.content_type,
+        title_guess=title_guess,
+        widget_matches=sorted(parser.widget_signals),
+        unknown_regions=max(parser.interactive_markers - len(parser.widget_signals), 0),
+        confidence=0.92 if main_regions else 0.55,
+        warnings=warnings,
+        extraction_notes=extraction_notes,
+        seo={
+            "title": title_guess,
+            "meta_description": parser.meta_description,
+            "h1": normalize_text(" ".join(parser.h1_parts)) or None,
+            "canonical_url": parser.canonical_url,
+            "robots": parser.robots,
+            "open_graph": parser.open_graph,
+            "twitter": parser.twitter,
+            "schema_graph_raw": parser.schema_graph_raw,
+        },
+        schema_types=schema_types,
+        layout={
+            "regions": main_regions[:24],
+            "counts": summarize_layout_counts(main_regions),
+        },
         text_blocks=text_blocks,
         images=images,
         media_text_regions=media_text_regions,
@@ -598,8 +902,11 @@ def humanize_path(path: str) -> str:
 
 async def execute_site_migration(request: dict) -> dict:
     payload = dict(request.get("input_payload") or {})
+    action = str(payload.get("action") or DISCOVER_SITE_ACTION)
     options = dict(payload.get("options") or {})
     homepage_url = str(payload.get("homepage_url") or "")
+    if action == EXTRACT_PAGE_DOCUMENTS_ACTION:
+        return await execute_page_document_extraction(request)
     detect_widgets = bool(options.get("detect_registered_widgets", False))
     warnings: list[str] = []
 
@@ -712,6 +1019,55 @@ async def execute_site_migration(request: dict) -> dict:
             "location_id": payload.get("location_id"),
             "page_count_guess": len(pages),
             "pages": [asdict(page) for page in pages],
+            "warnings": warnings,
+        },
+    }
+
+
+async def execute_page_document_extraction(request: dict) -> dict:
+    payload = dict(request.get("input_payload") or {})
+    pages = list(payload.get("pages") or [])
+    warnings: list[str] = []
+    extracted_pages: list[dict[str, Any]] = []
+
+    for page in pages:
+        path = str(page.get("path") or "/")
+        page_url = str(page.get("source_url") or page.get("final_url") or "")
+        title_guess = str(page.get("title_guess") or humanize_path(path))
+        if not page_url:
+            warnings.append(f"page extraction skipped for {path}: source_url missing")
+            continue
+        try:
+            artifact = extract_page_document_candidate(
+                path=path,
+                page_url=page_url,
+                title_guess=title_guess,
+                widget_matches=list(page.get("widget_matches") or []),
+            )
+            extracted_pages.append(asdict(artifact))
+        except Exception as error:
+            warnings.append(f"page extraction failed for {path}: {error}")
+
+    warnings.append(
+        "Page-document extraction uses ordered main-content walking and wrapper suppression, but widget reconstruction is still provisional."
+    )
+
+    return {
+        "accepted": True,
+        "workflow_kind": request["kind"],
+        "site_id": request["site_id"],
+        "branch_name": request["branch_name"],
+        "requested_runtime": request["requested_runtime"],
+        "temporal_queue": request["temporal_queue"],
+        "migration": {
+            "status": "review_ready",
+            "action": EXTRACT_PAGE_DOCUMENTS_ACTION,
+            "migration_job_id": payload.get("migration_job_id"),
+            "homepage_url": payload.get("homepage_url"),
+            "client_id": payload.get("client_id"),
+            "location_id": payload.get("location_id"),
+            "page_count_guess": len(extracted_pages),
+            "pages": extracted_pages,
             "warnings": warnings,
         },
     }
