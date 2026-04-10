@@ -42,6 +42,10 @@ Useful API routes:
 - `GET /api/migrations/:migration_id/pages`
 - `GET /api/migrations/:migration_id/pages/:page_id`
 - `POST /api/migrations/:migration_id/approve`
+- `POST /api/migrations/:migration_id/import-draft`
+- `GET /api/draft-change-sets/:change_set_id`
+- `GET /api/draft-change-sets/:change_set_id/changes`
+- `GET /preview/draft-change-sets/:change_set_id/changes/:change_id`
 - `GET /api/widget-definitions`
 - `GET /api/widget-definitions/:slug/versions`
 - `POST /api/widget-sources/import-local`

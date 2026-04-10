@@ -1,6 +1,6 @@
 use crate::models::{
-    AccountRow, BranchRow, MigrationJobRow, MigrationPageRow, OutboxEventRow, SiteRow,
-    WidgetDefinitionRow, WidgetDefinitionVersionRow, WorkflowRequestRow,
+    AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow, MigrationPageRow,
+    OutboxEventRow, SiteRow, WidgetDefinitionRow, WidgetDefinitionVersionRow, WorkflowRequestRow,
 };
 use sqlx::{PgPool, query_as, query_scalar};
 use uuid::Uuid;
@@ -461,6 +461,172 @@ impl PgRepository {
         )
         .bind(migration_job_id)
         .bind(approved_at)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn update_migration_job_status(
+        &self,
+        migration_job_id: Uuid,
+        status: &str,
+    ) -> Result<Option<MigrationJobRow>, sqlx::Error> {
+        query_as::<_, MigrationJobRow>(
+            r#"
+            UPDATE migration_jobs
+            SET status = $2
+            WHERE id = $1
+            RETURNING id, site_id, workflow_request_id, workflow_id, branch_name, homepage_url,
+                      client_id, location_id, legacy_api_profile, status, options, warnings,
+                      created_at, approved_at
+            "#,
+        )
+        .bind(migration_job_id)
+        .bind(status)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn insert_draft_change_set(
+        &self,
+        row: &DraftChangeSetRow,
+    ) -> Result<DraftChangeSetRow, sqlx::Error> {
+        query_as::<_, DraftChangeSetRow>(
+            r#"
+            INSERT INTO draft_change_sets (
+                id,
+                site_id,
+                branch_id,
+                base_snapshot_id,
+                source_kind,
+                status,
+                name,
+                description,
+                metadata,
+                created_by,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id, site_id, branch_id, base_snapshot_id, source_kind, status, name,
+                      description, metadata, created_by, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.site_id)
+        .bind(row.branch_id)
+        .bind(row.base_snapshot_id)
+        .bind(&row.source_kind)
+        .bind(&row.status)
+        .bind(&row.name)
+        .bind(&row.description)
+        .bind(&row.metadata)
+        .bind(&row.created_by)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn insert_draft_change(
+        &self,
+        row: &DraftChangeRow,
+    ) -> Result<DraftChangeRow, sqlx::Error> {
+        query_as::<_, DraftChangeRow>(
+            r#"
+            INSERT INTO draft_changes (
+                id,
+                change_set_id,
+                site_id,
+                page_id,
+                migration_job_id,
+                migration_page_id,
+                change_kind,
+                resource_kind,
+                resource_key,
+                status,
+                title,
+                payload,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            RETURNING id, change_set_id, site_id, page_id, migration_job_id, migration_page_id,
+                      change_kind, resource_kind, resource_key, status, title, payload,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.change_set_id)
+        .bind(row.site_id)
+        .bind(row.page_id)
+        .bind(row.migration_job_id)
+        .bind(row.migration_page_id)
+        .bind(&row.change_kind)
+        .bind(&row.resource_kind)
+        .bind(&row.resource_key)
+        .bind(&row.status)
+        .bind(&row.title)
+        .bind(&row.payload)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn draft_change_set(
+        &self,
+        change_set_id: Uuid,
+    ) -> Result<Option<DraftChangeSetRow>, sqlx::Error> {
+        query_as::<_, DraftChangeSetRow>(
+            r#"
+            SELECT id, site_id, branch_id, base_snapshot_id, source_kind, status, name,
+                   description, metadata, created_by, created_at, updated_at
+            FROM draft_change_sets
+            WHERE id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(change_set_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn draft_changes(
+        &self,
+        change_set_id: Uuid,
+    ) -> Result<Vec<DraftChangeRow>, sqlx::Error> {
+        query_as::<_, DraftChangeRow>(
+            r#"
+            SELECT id, change_set_id, site_id, page_id, migration_job_id, migration_page_id,
+                   change_kind, resource_kind, resource_key, status, title, payload,
+                   created_at, updated_at
+            FROM draft_changes
+            WHERE change_set_id = $1
+            ORDER BY created_at ASC, resource_key ASC
+            "#,
+        )
+        .bind(change_set_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn draft_change(
+        &self,
+        change_set_id: Uuid,
+        change_id: Uuid,
+    ) -> Result<Option<DraftChangeRow>, sqlx::Error> {
+        query_as::<_, DraftChangeRow>(
+            r#"
+            SELECT id, change_set_id, site_id, page_id, migration_job_id, migration_page_id,
+                   change_kind, resource_kind, resource_key, status, title, payload,
+                   created_at, updated_at
+            FROM draft_changes
+            WHERE change_set_id = $1 AND id = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(change_set_id)
+        .bind(change_id)
         .fetch_optional(&self.pool)
         .await
     }

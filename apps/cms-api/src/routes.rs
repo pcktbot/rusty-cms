@@ -7,6 +7,10 @@ use axum::{
     response::Html,
     routing::{get, post},
 };
+use cms_core::draft::{
+    DraftChangeKind, DraftChangeSetSourceKind, DraftChangeSetStatus, DraftChangeStatus,
+    DraftPreviewRef, DraftResourceKind, ImportedPageDraft,
+};
 use cms_core::health::HealthStatus;
 use cms_core::site::{SiteKind, SiteSnapshotRef};
 use cms_core::widget::{
@@ -15,8 +19,8 @@ use cms_core::widget::{
 };
 use cms_db::{
     models::{
-        AccountRow, BranchRow, MigrationJobRow, MigrationPageRow, OutboxEventRow, SiteRow,
-        WorkflowRequestRow,
+        AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow,
+        MigrationPageRow, OutboxEventRow, SiteRow, WorkflowRequestRow,
     },
     repositories::PgRepository,
 };
@@ -246,6 +250,51 @@ pub struct MigrationApprovalReceipt {
     pub approved_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportMigrationDraftReceipt {
+    pub imported: bool,
+    pub migration_id: Uuid,
+    pub draft_change_set_id: Uuid,
+    pub branch_name: String,
+    pub base_snapshot_id: Option<Uuid>,
+    pub change_count: usize,
+    pub preview_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DraftChangeSetSummary {
+    pub id: Uuid,
+    pub site_id: Uuid,
+    pub branch_name: String,
+    pub base_snapshot_id: Option<Uuid>,
+    pub source_kind: DraftChangeSetSourceKind,
+    pub status: DraftChangeSetStatus,
+    pub name: String,
+    pub description: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub change_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DraftChangeSummary {
+    pub id: Uuid,
+    pub change_set_id: Uuid,
+    pub site_id: Uuid,
+    pub migration_job_id: Option<Uuid>,
+    pub migration_page_id: Option<Uuid>,
+    pub change_kind: DraftChangeKind,
+    pub resource_kind: DraftResourceKind,
+    pub resource_key: String,
+    pub status: DraftChangeStatus,
+    pub title: String,
+    pub payload: serde_json::Value,
+    pub preview_url: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -290,8 +339,24 @@ pub fn build_router(state: AppState) -> Router {
             get(migration_page_detail),
         )
         .route(
+            "/api/migrations/{migration_id}/import-draft",
+            post(import_migration_to_draft),
+        )
+        .route(
             "/api/migrations/{migration_id}/approve",
             post(approve_migration),
+        )
+        .route(
+            "/api/draft-change-sets/{change_set_id}",
+            get(draft_change_set_detail),
+        )
+        .route(
+            "/api/draft-change-sets/{change_set_id}/changes",
+            get(draft_change_set_changes),
+        )
+        .route(
+            "/preview/draft-change-sets/{change_set_id}/changes/{change_id}",
+            get(draft_change_preview),
         )
         .route("/api/workflows/definitions", get(workflow_definitions))
         .route("/api/demo/workflow-request", get(demo_workflow_request))
@@ -656,6 +721,229 @@ async fn approve_migration(
         status,
         approved_at,
     }))
+}
+
+async fn import_migration_to_draft(
+    Path(migration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ImportMigrationDraftReceipt>, (StatusCode, Json<serde_json::Value>)> {
+    let repository = state.repository.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "draft import requires a configured database"
+        })),
+    ))?;
+
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(json_db_error)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("migration {migration_id} was not found")
+            })),
+        ))?;
+
+    if !matches!(
+        record.status,
+        MigrationStatus::ReviewReady | MigrationStatus::Approved | MigrationStatus::Imported
+    ) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "migration must be review_ready or approved before draft import"
+            })),
+        ));
+    }
+
+    let branch = resolve_or_create_migration_branch(repository, &record)
+        .await
+        .map_err(json_db_error)?;
+    let now = OffsetDateTime::now_utc();
+    let change_set_id = Uuid::new_v4();
+    let name = format!("Migration import: {}", record.homepage_url);
+    let description = Some(format!(
+        "Imported {} discovered pages from migration {}",
+        record.pages.len(),
+        record.id
+    ));
+
+    let change_set_row = DraftChangeSetRow {
+        id: change_set_id,
+        site_id: record.site_id,
+        branch_id: branch.id,
+        base_snapshot_id: branch.head_snapshot_id,
+        source_kind: draft_change_set_source_kind_name(DraftChangeSetSourceKind::MigrationImport)
+            .to_owned(),
+        status: draft_change_set_status_name(DraftChangeSetStatus::PreviewReady).to_owned(),
+        name,
+        description,
+        metadata: sqlx::types::Json(serde_json::json!({
+            "migration_job_id": record.id,
+            "workflow_request_id": record.workflow_request_id,
+            "homepage_url": record.homepage_url,
+            "client_id": record.client_id,
+            "location_id": record.location_id,
+            "legacy_api_profile": record.legacy_api_profile,
+        })),
+        created_by: "migration-import".to_owned(),
+        created_at: now,
+        updated_at: now,
+    };
+    repository
+        .insert_draft_change_set(&change_set_row)
+        .await
+        .map_err(json_db_error)?;
+
+    let mut first_preview_url = None;
+    for page in &record.pages {
+        let imported_page = imported_page_draft_from_migration_page(&record, page);
+        let change_row = DraftChangeRow {
+            id: Uuid::new_v4(),
+            change_set_id,
+            site_id: record.site_id,
+            page_id: None,
+            migration_job_id: Some(record.id),
+            migration_page_id: Some(page.id),
+            change_kind: draft_change_kind_name(DraftChangeKind::UpsertPageShell).to_owned(),
+            resource_kind: draft_resource_kind_name(DraftResourceKind::Page).to_owned(),
+            resource_key: page.path.clone(),
+            status: draft_change_status_name(DraftChangeStatus::Imported).to_owned(),
+            title: imported_page.title.clone(),
+            payload: sqlx::types::Json(serde_json::to_value(imported_page).map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("failed to encode imported page payload: {error}")
+                    })),
+                )
+            })?),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let inserted = repository
+            .insert_draft_change(&change_row)
+            .await
+            .map_err(json_db_error)?;
+
+        if first_preview_url.is_none() {
+            first_preview_url = Some(format!(
+                "/preview/draft-change-sets/{}/changes/{}",
+                change_set_id, inserted.id
+            ));
+        }
+    }
+
+    repository
+        .update_migration_job_status(
+            migration_id,
+            migration_status_name(&MigrationStatus::Imported),
+        )
+        .await
+        .map_err(json_db_error)?;
+
+    Ok(Json(ImportMigrationDraftReceipt {
+        imported: true,
+        migration_id,
+        draft_change_set_id: change_set_id,
+        branch_name: branch.name,
+        base_snapshot_id: branch.head_snapshot_id,
+        change_count: record.pages.len(),
+        preview_url: first_preview_url,
+    }))
+}
+
+async fn draft_change_set_detail(
+    Path(change_set_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<DraftChangeSetSummary>, StatusCode> {
+    let repository = state
+        .repository
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let change_set_row = repository
+        .draft_change_set(change_set_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let branch = repository
+        .list_branches_for_site(change_set_row.site_id)
+        .await
+        .map_err(internal_db_error)?
+        .into_iter()
+        .find(|row| row.id == change_set_row.branch_id)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let change_count = repository
+        .draft_changes(change_set_id)
+        .await
+        .map_err(internal_db_error)?
+        .len();
+
+    draft_change_set_summary_from_row(change_set_row, &branch.name, change_count)
+        .map(Json)
+        .map_err(internal_mapping_error)
+}
+
+async fn draft_change_set_changes(
+    Path(change_set_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<DraftChangeSummary>>, StatusCode> {
+    let repository = state
+        .repository
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let rows = repository
+        .draft_changes(change_set_id)
+        .await
+        .map_err(internal_db_error)?;
+    let changes = rows
+        .into_iter()
+        .map(draft_change_summary_from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(internal_mapping_error)?;
+    Ok(Json(changes))
+}
+
+async fn draft_change_preview(
+    Path((change_set_id, change_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Html<String>, StatusCode> {
+    let repository = state
+        .repository
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let change_set_row = repository
+        .draft_change_set(change_set_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let change_row = repository
+        .draft_change(change_set_id, change_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let branch = repository
+        .list_branches_for_site(change_set_row.site_id)
+        .await
+        .map_err(internal_db_error)?
+        .into_iter()
+        .find(|row| row.id == change_set_row.branch_id)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let preview = DraftPreviewRef {
+        site_id: change_set_row.site_id,
+        branch_name: branch.name,
+        change_set_id,
+    };
+    let page: ImportedPageDraft = serde_json::from_value(change_row.payload.0)
+        .map_err(|error| internal_mapping_error(error.to_string()))?;
+
+    let html = state
+        .renderer
+        .render_imported_page_preview(&preview, &page)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
 }
 
 async fn widget_definitions(
@@ -1253,6 +1541,7 @@ async fn migration_console() -> Html<String> {
             <div class="actions" style="margin: 12px 0 14px;">
               <button type="button" class="secondary" id="load-latest">Load latest job</button>
               <button type="button" id="approve-job">Approve job</button>
+              <button type="button" class="secondary" id="import-draft">Import draft</button>
             </div>
             <div id="summary" class="stack"></div>
             <div id="pages" class="pages"></div>
@@ -1392,6 +1681,28 @@ async fn migration_console() -> Html<String> {
             method: "POST"
           });
           setLog(result);
+          await loadMigration(latestMigrationId);
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("import-draft").addEventListener("click", async () => {
+        if (!latestMigrationId) {
+          setStatus("idle");
+          setLog("No migration selected.");
+          return;
+        }
+        try {
+          setStatus("importing draft");
+          const result = await fetchJson(`/api/migrations/${latestMigrationId}/import-draft`, {
+            method: "POST"
+          });
+          setLog(result);
+          if (result.preview_url) {
+            window.open(result.preview_url, "_blank", "noopener,noreferrer");
+          }
           await loadMigration(latestMigrationId);
         } catch (error) {
           setStatus("error");
@@ -1676,7 +1987,7 @@ async fn create_migration_target_site(
         .map_err(json_db_error)?
         .id;
 
-    for branch_name in ["draft", "production"] {
+    for branch_name in ["draft", "production", "migration/draft"] {
         let branch_row = BranchRow {
             id: Uuid::new_v4(),
             site_id,
@@ -1770,6 +2081,66 @@ fn migration_page_summary(page: &MigrationPageDetail) -> MigrationPageSummary {
     }
 }
 
+async fn resolve_or_create_migration_branch(
+    repository: &PgRepository,
+    record: &MigrationJobRecord,
+) -> Result<BranchRow, sqlx::Error> {
+    if let Some(branch) = repository
+        .branch_head(record.site_id, &record.branch_name)
+        .await?
+    {
+        return Ok(branch);
+    }
+
+    let fallback_branch = repository
+        .branch_head(record.site_id, "draft")
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    let now = OffsetDateTime::now_utc();
+    let branch_row = BranchRow {
+        id: Uuid::new_v4(),
+        site_id: record.site_id,
+        name: record.branch_name.clone(),
+        head_snapshot_id: fallback_branch.head_snapshot_id,
+        created_at: now,
+        updated_at: now,
+    };
+
+    repository.insert_branch(&branch_row).await
+}
+
+fn imported_page_draft_from_migration_page(
+    record: &MigrationJobRecord,
+    page: &MigrationPageDetail,
+) -> ImportedPageDraft {
+    let slug = slug_from_path(&page.path);
+    let summary = if page.widget_matches.is_empty() {
+        format!(
+            "Imported discovery shell for {} with {} unknown regions.",
+            page.path, page.unknown_regions
+        )
+    } else {
+        format!(
+            "Imported discovery shell for {} with widget matches: {}.",
+            page.path,
+            page.widget_matches.join(", ")
+        )
+    };
+
+    ImportedPageDraft {
+        migration_job_id: record.id,
+        migration_page_id: page.id,
+        path: page.path.clone(),
+        slug,
+        title: page.title_guess.clone(),
+        summary,
+        widget_matches: page.widget_matches.clone(),
+        warnings: page.warnings.clone(),
+        extraction_notes: page.extraction_notes.clone(),
+        unknown_regions: page.unknown_regions,
+    }
+}
+
 async fn store_migration_record(
     state: &AppState,
     record: &MigrationJobRecord,
@@ -1842,6 +2213,15 @@ fn homepage_path(homepage_url: &str) -> String {
         }
     }
     "/".to_owned()
+}
+
+fn slug_from_path(path: &str) -> String {
+    path.trim_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("home")
+        .to_owned()
 }
 
 fn migration_job_row_from_record(record: &MigrationJobRecord) -> Result<MigrationJobRow, String> {
@@ -1924,6 +2304,49 @@ fn migration_page_detail_from_row(row: MigrationPageRow) -> MigrationPageDetail 
     }
 }
 
+fn draft_change_set_summary_from_row(
+    row: DraftChangeSetRow,
+    branch_name: &str,
+    change_count: usize,
+) -> Result<DraftChangeSetSummary, String> {
+    Ok(DraftChangeSetSummary {
+        id: row.id,
+        site_id: row.site_id,
+        branch_name: branch_name.to_owned(),
+        base_snapshot_id: row.base_snapshot_id,
+        source_kind: parse_draft_change_set_source_kind(&row.source_kind)?,
+        status: parse_draft_change_set_status(&row.status)?,
+        name: row.name,
+        description: row.description,
+        metadata: row.metadata.0,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        change_count,
+    })
+}
+
+fn draft_change_summary_from_row(row: DraftChangeRow) -> Result<DraftChangeSummary, String> {
+    Ok(DraftChangeSummary {
+        id: row.id,
+        change_set_id: row.change_set_id,
+        site_id: row.site_id,
+        migration_job_id: row.migration_job_id,
+        migration_page_id: row.migration_page_id,
+        change_kind: parse_draft_change_kind(&row.change_kind)?,
+        resource_kind: parse_draft_resource_kind(&row.resource_kind)?,
+        resource_key: row.resource_key,
+        status: parse_draft_change_status(&row.status)?,
+        title: row.title,
+        payload: row.payload.0,
+        preview_url: format!(
+            "/preview/draft-change-sets/{}/changes/{}",
+            row.change_set_id, row.id
+        ),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
 fn migration_status_name(status: &MigrationStatus) -> &'static str {
     match status {
         MigrationStatus::Queued => "queued",
@@ -1932,6 +2355,45 @@ fn migration_status_name(status: &MigrationStatus) -> &'static str {
         MigrationStatus::Approved => "approved",
         MigrationStatus::Imported => "imported",
         MigrationStatus::Failed => "failed",
+    }
+}
+
+fn draft_change_set_source_kind_name(kind: DraftChangeSetSourceKind) -> &'static str {
+    match kind {
+        DraftChangeSetSourceKind::MigrationImport => "migration_import",
+        DraftChangeSetSourceKind::ManualEdits => "manual_edits",
+        DraftChangeSetSourceKind::TemplateSync => "template_sync",
+        DraftChangeSetSourceKind::BulkOperation => "bulk_operation",
+    }
+}
+
+fn draft_change_set_status_name(status: DraftChangeSetStatus) -> &'static str {
+    match status {
+        DraftChangeSetStatus::Open => "open",
+        DraftChangeSetStatus::PreviewReady => "preview_ready",
+        DraftChangeSetStatus::Published => "published",
+        DraftChangeSetStatus::Discarded => "discarded",
+    }
+}
+
+fn draft_change_kind_name(kind: DraftChangeKind) -> &'static str {
+    match kind {
+        DraftChangeKind::UpsertPageShell => "upsert_page_shell",
+    }
+}
+
+fn draft_resource_kind_name(kind: DraftResourceKind) -> &'static str {
+    match kind {
+        DraftResourceKind::Page => "page",
+    }
+}
+
+fn draft_change_status_name(status: DraftChangeStatus) -> &'static str {
+    match status {
+        DraftChangeStatus::Pending => "pending",
+        DraftChangeStatus::Selected => "selected",
+        DraftChangeStatus::Imported => "imported",
+        DraftChangeStatus::Discarded => "discarded",
     }
 }
 
@@ -1944,6 +2406,50 @@ fn parse_migration_status(value: &str) -> Result<MigrationStatus, String> {
         "imported" => Ok(MigrationStatus::Imported),
         "failed" => Ok(MigrationStatus::Failed),
         _ => Err(format!("unknown migration status: {value}")),
+    }
+}
+
+fn parse_draft_change_set_source_kind(value: &str) -> Result<DraftChangeSetSourceKind, String> {
+    match normalize_name(value).as_str() {
+        "migrationimport" | "migration_import" => Ok(DraftChangeSetSourceKind::MigrationImport),
+        "manualedits" | "manual_edits" => Ok(DraftChangeSetSourceKind::ManualEdits),
+        "templatesync" | "template_sync" => Ok(DraftChangeSetSourceKind::TemplateSync),
+        "bulkoperation" | "bulk_operation" => Ok(DraftChangeSetSourceKind::BulkOperation),
+        _ => Err(format!("unknown draft change set source kind: {value}")),
+    }
+}
+
+fn parse_draft_change_set_status(value: &str) -> Result<DraftChangeSetStatus, String> {
+    match normalize_name(value).as_str() {
+        "open" => Ok(DraftChangeSetStatus::Open),
+        "previewready" | "preview_ready" => Ok(DraftChangeSetStatus::PreviewReady),
+        "published" => Ok(DraftChangeSetStatus::Published),
+        "discarded" => Ok(DraftChangeSetStatus::Discarded),
+        _ => Err(format!("unknown draft change set status: {value}")),
+    }
+}
+
+fn parse_draft_change_kind(value: &str) -> Result<DraftChangeKind, String> {
+    match normalize_name(value).as_str() {
+        "upsertpageshell" | "upsert_page_shell" => Ok(DraftChangeKind::UpsertPageShell),
+        _ => Err(format!("unknown draft change kind: {value}")),
+    }
+}
+
+fn parse_draft_resource_kind(value: &str) -> Result<DraftResourceKind, String> {
+    match normalize_name(value).as_str() {
+        "page" => Ok(DraftResourceKind::Page),
+        _ => Err(format!("unknown draft resource kind: {value}")),
+    }
+}
+
+fn parse_draft_change_status(value: &str) -> Result<DraftChangeStatus, String> {
+    match normalize_name(value).as_str() {
+        "pending" => Ok(DraftChangeStatus::Pending),
+        "selected" => Ok(DraftChangeStatus::Selected),
+        "imported" => Ok(DraftChangeStatus::Imported),
+        "discarded" => Ok(DraftChangeStatus::Discarded),
+        _ => Err(format!("unknown draft change status: {value}")),
     }
 }
 
@@ -2479,6 +2985,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn import_draft_requires_database_configuration() {
+        let response = build_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/migrations/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/import-draft")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn imported_page_draft_uses_last_path_segment_as_slug() {
+        let record = MigrationJobRecord {
+            id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+            site_id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+            workflow_request_id: Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap(),
+            workflow_id: "workflow-1".to_owned(),
+            branch_name: "migration/draft".to_owned(),
+            homepage_url: "https://example.com/".to_owned(),
+            client_id: Uuid::parse_str("dddddddd-dddd-dddd-dddd-dddddddddddd").unwrap(),
+            location_id: Uuid::parse_str("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee").unwrap(),
+            legacy_api_profile: None,
+            status: MigrationStatus::ReviewReady,
+            options: MigrationOptions {
+                crawl_scope: MigrationCrawlScope::Subpath,
+                follow_subdomains: false,
+                max_pages: 10,
+                respect_robots: true,
+                include_assets: true,
+                detect_registered_widgets: true,
+                use_legacy_api_enrichment: false,
+                screenshot_compare_after_import: false,
+            },
+            pages: Vec::new(),
+            warnings: Vec::new(),
+            created_at: OffsetDateTime::now_utc(),
+            approved_at: None,
+        };
+        let page = MigrationPageDetail {
+            id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+            path: "/apartments/vt/shelburne/floor-plans".to_owned(),
+            title_guess: "Floor Plans".to_owned(),
+            widget_matches: vec!["floor-plans-plus".to_owned()],
+            unknown_regions: 2,
+            confidence: 0.92,
+            warnings: vec![],
+            extraction_notes: vec![],
+        };
+
+        let imported = imported_page_draft_from_migration_page(&record, &page);
+        assert_eq!(imported.slug, "floor-plans");
+        assert!(imported.summary.contains("floor-plans-plus"));
     }
 
     #[test]

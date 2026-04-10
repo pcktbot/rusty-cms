@@ -132,6 +132,40 @@ pub struct MigrationPageRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct DraftChangeSetRow {
+    pub id: Uuid,
+    pub site_id: Uuid,
+    pub branch_id: Uuid,
+    pub base_snapshot_id: Option<Uuid>,
+    pub source_kind: String,
+    pub status: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub metadata: Json<serde_json::Value>,
+    pub created_by: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct DraftChangeRow {
+    pub id: Uuid,
+    pub change_set_id: Uuid,
+    pub site_id: Uuid,
+    pub page_id: Option<Uuid>,
+    pub migration_job_id: Option<Uuid>,
+    pub migration_page_id: Option<Uuid>,
+    pub change_kind: String,
+    pub resource_kind: String,
+    pub resource_key: String,
+    pub status: String,
+    pub title: String,
+    pub payload: Json<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
 pub struct OutboxEventRow {
     pub id: Uuid,
     pub topic: String,

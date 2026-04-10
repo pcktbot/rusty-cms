@@ -40,6 +40,7 @@ Status legend:
 - `implemented` preview render stub with snapshot identity
 - `implemented` publish state machine domain model
 - `scaffolded` publish target model and artifact tables
+- `scaffolded` imported-draft preview route for migration-generated change sets
 - `planned` real snapshot renderer
 - `planned` full-site static build pipeline
 - `planned` atomic release promotion on disk
@@ -77,11 +78,45 @@ Status legend:
 - `implemented` migration workflow admission and Temporal trigger path
 - `implemented` migration review records and page-level review endpoints
 - `implemented` homepage crawler and same-host route discovery
+- `implemented` migration-to-draft import route that creates draft change sets and provisional page changes
 - `planned` DOM/template classifier
 - `planned` registered-widget signature detection
 - `planned` targeted legacy API enrichment
-- `planned` draft snapshot importer
+- `scaffolded` draft snapshot importer via provisional page-shell changes
 - `planned` screenshot and content diff validation
+
+## Hybrid preview and selective publish
+
+Phase 1 is now defined as the minimum path from migration discovery to draft preview.
+
+Phase 1 goals:
+
+1. Persist unpublished work as draft change sets instead of mutating a branch head directly.
+2. Import migration results into provisional page-shell draft changes.
+3. Render per-page draft previews from those imported changes.
+
+Phase 1 shape:
+
+- `implemented` `draft_change_sets` hold branch context, base snapshot, source kind, and status
+- `implemented` `draft_changes` hold page-level change payloads keyed by change set
+- `implemented` migration import currently produces `upsert_page_shell` changes with provisional metadata-driven payloads
+- `implemented` preview routes can render imported page-shell changes without publishing
+- `planned` rich DOM-to-document extraction
+- `planned` preview invalidation and Redis cache keys
+- `planned` publish selection from arbitrary subsets of draft changes
+
+Planned cache strategy:
+
+- Postgres remains the source of truth for change sets, change payloads, and publish selections
+- Redis will cache fragment/page preview output keyed by `site`, `branch`, `base_snapshot`, and selected change-set hash
+- Redis will also hold dependency fanout and short-lived preview session state, not authoritative content
+
+Planned selective publish strategy:
+
+- branch head points to the last published snapshot
+- unpublished work accumulates in draft change sets on top of that base snapshot
+- publish creates a candidate snapshot from an explicit set of selected changes
+- release promotion stays atomic because only the candidate snapshot is built and promoted
 
 ## UI
 
@@ -93,8 +128,8 @@ Status legend:
 
 ## Immediate next steps
 
-1. Persist migration jobs and review artifacts in Postgres instead of memory.
-2. Add widget signature metadata to the registry model.
-3. Build the first crawl/discovery activity and connect it to the migration workflow.
+1. Replace provisional page-shell import payloads with DOM-derived page documents.
+2. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
+3. Add preview cache keys and Redis-backed invalidation for draft page renders.
 4. Promote imported widget repos into real registry rows and version artifacts.
-5. Replace widget-command stubs with draft snapshot mutations.
+5. Replace widget-command stubs with real draft change mutations on top of selected base snapshots.
