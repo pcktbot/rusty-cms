@@ -1,6 +1,6 @@
 use crate::models::{
-    BranchRow, MigrationJobRow, MigrationPageRow, OutboxEventRow, SiteRow, WidgetDefinitionRow,
-    WidgetDefinitionVersionRow, WorkflowRequestRow,
+    AccountRow, BranchRow, MigrationJobRow, MigrationPageRow, OutboxEventRow, SiteRow,
+    WidgetDefinitionRow, WidgetDefinitionVersionRow, WorkflowRequestRow,
 };
 use sqlx::{PgPool, query_as, query_scalar};
 use uuid::Uuid;
@@ -28,6 +28,85 @@ impl PgRepository {
             "#,
         )
         .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn insert_account(&self, row: &AccountRow) -> Result<AccountRow, sqlx::Error> {
+        query_as::<_, AccountRow>(
+            r#"
+            INSERT INTO accounts (
+                id,
+                name,
+                slug,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, slug, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(&row.name)
+        .bind(&row.slug)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn insert_site(&self, row: &SiteRow) -> Result<SiteRow, sqlx::Error> {
+        query_as::<_, SiteRow>(
+            r#"
+            INSERT INTO sites (
+                id,
+                account_id,
+                name,
+                slug,
+                primary_host,
+                site_kind,
+                source_template_site_id,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id, account_id, name, slug, primary_host, site_kind, source_template_site_id, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.account_id)
+        .bind(&row.name)
+        .bind(&row.slug)
+        .bind(&row.primary_host)
+        .bind(&row.site_kind)
+        .bind(row.source_template_site_id)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn insert_branch(&self, row: &BranchRow) -> Result<BranchRow, sqlx::Error> {
+        query_as::<_, BranchRow>(
+            r#"
+            INSERT INTO branches (
+                id,
+                site_id,
+                name,
+                head_snapshot_id,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, site_id, name, head_snapshot_id, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.site_id)
+        .bind(&row.name)
+        .bind(row.head_snapshot_id)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
         .await
     }
 

@@ -14,7 +14,10 @@ use cms_core::widget::{
     WidgetRuntime, WidgetSourceKind,
 };
 use cms_db::{
-    models::{MigrationJobRow, MigrationPageRow, OutboxEventRow, WorkflowRequestRow},
+    models::{
+        AccountRow, BranchRow, MigrationJobRow, MigrationPageRow, OutboxEventRow, SiteRow,
+        WorkflowRequestRow,
+    },
     repositories::PgRepository,
 };
 use cms_registry::importer::{ImportedWidgetPackage, WidgetImportError, WidgetSourceImporter};
@@ -141,11 +144,24 @@ pub struct MigrationOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMigrationRequest {
+    pub target_site_id: Option<Uuid>,
+    pub create_site: Option<CreateSiteTarget>,
     pub homepage_url: String,
     pub client_id: Uuid,
     pub location_id: Uuid,
     pub legacy_api_profile: Option<String>,
     pub options: MigrationOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSiteTarget {
+    pub account_id: Option<Uuid>,
+    pub account_name: Option<String>,
+    pub account_slug: Option<String>,
+    pub name: String,
+    pub slug: String,
+    pub primary_host: String,
+    pub site_kind: SiteKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,6 +251,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/runtime", get(runtime_info))
         .route("/api/sites", get(sites))
+        .route("/api/migrations", post(create_migration_without_site))
         .route("/api/sites/{site_id}/branches", get(site_branches))
         .route(
             "/api/sites/{site_id}/branches/{branch_name}/head",
@@ -489,7 +506,23 @@ async fn create_migration(
     State(state): State<AppState>,
     Json(request): Json<CreateMigrationRequest>,
 ) -> Result<(StatusCode, Json<CreateMigrationReceipt>), (StatusCode, Json<serde_json::Value>)> {
-    ensure_site_exists(&state, site_id).await?;
+    let site_id = resolve_migration_site(&state, Some(site_id), &request).await?;
+    create_migration_inner(state, site_id, request).await
+}
+
+async fn create_migration_without_site(
+    State(state): State<AppState>,
+    Json(request): Json<CreateMigrationRequest>,
+) -> Result<(StatusCode, Json<CreateMigrationReceipt>), (StatusCode, Json<serde_json::Value>)> {
+    let site_id = resolve_migration_site(&state, None, &request).await?;
+    create_migration_inner(state, site_id, request).await
+}
+
+async fn create_migration_inner(
+    state: AppState,
+    site_id: Uuid,
+    request: CreateMigrationRequest,
+) -> Result<(StatusCode, Json<CreateMigrationReceipt>), (StatusCode, Json<serde_json::Value>)> {
     let workflow_request = migration_workflow_request(&state, site_id, &request)?;
     let definition = state.workflows.admit(&workflow_request).map_err(|error| {
         (
@@ -1121,9 +1154,49 @@ async fn migration_console() -> Html<String> {
           <section class="card">
             <form id="migration-form">
               <label>
-                Site
+                Target Mode
+                <select id="target-mode" name="target_mode">
+                  <option value="create_site">create_site</option>
+                  <option value="existing_site">existing_site</option>
+                </select>
+              </label>
+              <label>
+                Existing Site
                 <select id="site-id" name="site_id"></select>
               </label>
+              <div class="row-2">
+                <label>
+                  New Site Name
+                  <input id="new-site-name" value="Hearth Migration" />
+                </label>
+                <label>
+                  New Site Slug
+                  <input id="new-site-slug" value="hearth-migration" />
+                </label>
+              </div>
+              <div class="row-2">
+                <label>
+                  New Site Host
+                  <input id="new-site-host" value="hearth-migration.local" />
+                </label>
+                <label>
+                  Site Kind
+                  <select id="new-site-kind">
+                    <option value="standard">standard</option>
+                    <option value="template">template</option>
+                  </select>
+                </label>
+              </div>
+              <div class="row-2">
+                <label>
+                  Account Name
+                  <input id="account-name" value="Migration Account" />
+                </label>
+                <label>
+                  Account Slug
+                  <input id="account-slug" value="migration-account" />
+                </label>
+              </div>
               <label>
                 Homepage URL
                 <input id="homepage-url" name="homepage_url" value="https://g5-clw-hdmhijtexe-hearth.g5static.com/" />
@@ -1191,6 +1264,7 @@ async fn migration_console() -> Html<String> {
     <script>
       const statusEl = document.getElementById("status");
       const logEl = document.getElementById("log");
+      const targetModeEl = document.getElementById("target-mode");
       const siteSelect = document.getElementById("site-id");
       const summaryEl = document.getElementById("summary");
       const pagesEl = document.getElementById("pages");
@@ -1258,8 +1332,8 @@ async fn migration_console() -> Html<String> {
           option.textContent = "No sites found";
           option.value = "";
           siteSelect.appendChild(option);
-          setLog("No sites are available. Create a site row first, then reload.");
-          setStatus("no sites");
+          setLog("No sites are available yet. Use create_site mode to let the migration create one.");
+          setStatus("ready");
           return;
         }
 
@@ -1327,13 +1401,18 @@ async fn migration_console() -> Html<String> {
 
       document.getElementById("migration-form").addEventListener("submit", async (event) => {
         event.preventDefault();
-        if (!siteSelect.value) {
-          setStatus("blocked");
-          setLog("A site must exist before a migration job can be created.");
-          return;
-        }
+        const targetMode = targetModeEl.value;
 
         const payload = {
+          target_site_id: targetMode === "existing_site" && siteSelect.value ? siteSelect.value : null,
+          create_site: targetMode === "create_site" ? {
+            account_name: document.getElementById("account-name").value.trim(),
+            account_slug: document.getElementById("account-slug").value.trim(),
+            name: document.getElementById("new-site-name").value.trim(),
+            slug: document.getElementById("new-site-slug").value.trim(),
+            primary_host: document.getElementById("new-site-host").value.trim(),
+            site_kind: document.getElementById("new-site-kind").value
+          } : null,
           homepage_url: document.getElementById("homepage-url").value.trim(),
           client_id: document.getElementById("client-id").value.trim(),
           location_id: document.getElementById("location-id").value.trim(),
@@ -1349,9 +1428,15 @@ async fn migration_console() -> Html<String> {
           }
         };
 
+        if (targetMode === "existing_site" && !siteSelect.value) {
+          setStatus("blocked");
+          setLog("No existing site is selected. Switch to create_site mode or create a site first.");
+          return;
+        }
+
         try {
           setStatus("creating migration");
-          const result = await fetchJson(`/api/sites/${siteSelect.value}/migrations`, {
+          const result = await fetchJson(`/api/migrations`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(payload)
@@ -1475,6 +1560,138 @@ fn migration_workflow_request(
             allow_publish_side_effects: false,
         },
     })
+}
+
+async fn resolve_migration_site(
+    state: &AppState,
+    path_site_id: Option<Uuid>,
+    request: &CreateMigrationRequest,
+) -> Result<Uuid, (StatusCode, Json<serde_json::Value>)> {
+    match (
+        path_site_id,
+        request.target_site_id,
+        request.create_site.as_ref(),
+    ) {
+        (Some(path_id), Some(body_id), _) if path_id != body_id => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "path site_id does not match target_site_id"
+            })),
+        )),
+        (Some(path_id), _, Some(_)) => {
+            ensure_site_exists(state, path_id).await?;
+            Ok(path_id)
+        }
+        (Some(path_id), _, None) => {
+            ensure_site_exists(state, path_id).await?;
+            Ok(path_id)
+        }
+        (None, Some(site_id), None) => {
+            ensure_site_exists(state, site_id).await?;
+            Ok(site_id)
+        }
+        (None, None, Some(create_site)) => create_migration_target_site(state, create_site).await,
+        (None, Some(_), Some(_)) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "provide either target_site_id or create_site, not both"
+            })),
+        )),
+        (None, None, None) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "a migration target is required; provide target_site_id or create_site"
+            })),
+        )),
+    }
+}
+
+async fn create_migration_target_site(
+    state: &AppState,
+    create_site: &CreateSiteTarget,
+) -> Result<Uuid, (StatusCode, Json<serde_json::Value>)> {
+    if create_site.slug.trim().is_empty()
+        || create_site.name.trim().is_empty()
+        || create_site.primary_host.trim().is_empty()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "create_site name, slug, and primary_host are required"
+            })),
+        ));
+    }
+
+    let repository = state.repository.as_ref().ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(serde_json::json!({
+            "error": "DATABASE_URL must be configured to create a new site during migration"
+        })),
+    ))?;
+
+    let now = OffsetDateTime::now_utc();
+    let account_id = if let Some(account_id) = create_site.account_id {
+        account_id
+    } else {
+        let account_name = create_site.account_name.clone().ok_or((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "create_site.account_name is required when account_id is omitted"
+            })),
+        ))?;
+        let account_slug = create_site.account_slug.clone().ok_or((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "create_site.account_slug is required when account_id is omitted"
+            })),
+        ))?;
+        let account_row = AccountRow {
+            id: Uuid::new_v4(),
+            name: account_name,
+            slug: account_slug,
+            created_at: now,
+            updated_at: now,
+        };
+        repository
+            .insert_account(&account_row)
+            .await
+            .map_err(json_db_error)?
+            .id
+    };
+
+    let site_row = SiteRow {
+        id: Uuid::new_v4(),
+        account_id,
+        name: create_site.name.clone(),
+        slug: create_site.slug.clone(),
+        primary_host: create_site.primary_host.clone(),
+        site_kind: site_kind_name(create_site.site_kind).to_owned(),
+        source_template_site_id: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let site_id = repository
+        .insert_site(&site_row)
+        .await
+        .map_err(json_db_error)?
+        .id;
+
+    for branch_name in ["draft", "production"] {
+        let branch_row = BranchRow {
+            id: Uuid::new_v4(),
+            site_id,
+            name: branch_name.to_owned(),
+            head_snapshot_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        repository
+            .insert_branch(&branch_row)
+            .await
+            .map_err(json_db_error)?;
+    }
+
+    Ok(site_id)
 }
 
 fn migration_record_from_request(
@@ -1857,6 +2074,13 @@ fn site_summary_from_row(row: cms_db::models::SiteRow) -> Result<SiteSummary, St
     })
 }
 
+fn site_kind_name(kind: SiteKind) -> &'static str {
+    match kind {
+        SiteKind::Standard => "standard",
+        SiteKind::Template => "template",
+    }
+}
+
 fn branch_summary_from_row(row: cms_db::models::BranchRow) -> BranchSummary {
     BranchSummary {
         site_id: row.site_id,
@@ -2198,6 +2422,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&serde_json::json!({
+                            "target_site_id": site_id,
                             "homepage_url": "https://example.com/",
                             "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
                             "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -2220,6 +2445,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn create_migration_without_target_is_rejected() {
+        let response = build_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/migrations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "homepage_url": "https://example.com/",
+                            "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                            "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                            "options": {
+                                "crawl_scope": "subpath",
+                                "follow_subdomains": false,
+                                "max_pages": 25,
+                                "respect_robots": true,
+                                "include_assets": true,
+                                "detect_registered_widgets": true,
+                                "use_legacy_api_enrichment": false,
+                                "screenshot_compare_after_import": false
+                            }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

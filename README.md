@@ -36,6 +36,7 @@ Useful API routes:
 - `POST /api/sites/:site_id/pages/:page_id/widget-commands`
 - `POST /api/sites/:site_id/workflow-requests`
 - `POST /api/sites/:site_id/workflow-requests/trigger`
+- `POST /api/migrations`
 - `POST /api/sites/:site_id/migrations`
 - `GET /api/migrations/:migration_id`
 - `GET /api/migrations/:migration_id/pages`
