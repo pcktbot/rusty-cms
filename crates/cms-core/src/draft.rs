@@ -94,6 +94,8 @@ pub struct ImportedPageDraft {
     pub schema_types: Vec<String>,
     pub layout: Value,
     pub text_blocks: Vec<String>,
+    pub images: Vec<Value>,
+    pub media_text_regions: Vec<Value>,
     pub html_excerpt: Option<String>,
     pub document_candidate: Value,
 }

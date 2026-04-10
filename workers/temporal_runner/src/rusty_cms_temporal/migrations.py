@@ -57,6 +57,8 @@ class CrawledPageArtifact:
     schema_types: list[str]
     layout: dict[str, Any]
     text_blocks: list[str]
+    images: list[dict[str, Any]]
+    media_text_regions: list[dict[str, Any]]
     html_excerpt: str
     document_candidate: dict[str, Any]
     internal_links: list[str]
@@ -89,6 +91,8 @@ class PageParser(HTMLParser):
         self.schema_graph_raw: list[Any] = []
         self.text_blocks: list[str] = []
         self.layout_regions: list[dict[str, Any]] = []
+        self.images: list[dict[str, Any]] = []
+        self.media_text_regions: list[dict[str, Any]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = {key: value or "" for key, value in attrs}
@@ -114,6 +118,10 @@ class PageParser(HTMLParser):
             self.interactive_markers += 1
         elif tag in {"form", "video", "iframe"}:
             self.interactive_markers += 1
+        elif tag == "img":
+            image = self._build_image_candidate(tag, attrs_map, class_names, element_id)
+            if image:
+                self.images.append(image)
 
         if tag in {"p", "li", "h2", "h3"}:
             self._inside_text_tag = tag
@@ -228,6 +236,30 @@ class PageParser(HTMLParser):
         if region not in self.layout_regions:
             self.layout_regions.append(region)
 
+    def _build_image_candidate(
+        self,
+        tag: str,
+        attrs_map: dict[str, str],
+        class_names: str,
+        element_id: str,
+    ) -> dict[str, Any] | None:
+        src = attrs_map.get("src", "").strip()
+        if not src:
+            return None
+
+        role_hint = infer_role_hint(f"{class_names} {element_id}")
+        image = {
+            "src": src,
+            "srcset": attrs_map.get("srcset", "").strip() or None,
+            "sizes": attrs_map.get("sizes", "").strip() or None,
+            "alt": attrs_map.get("alt", "").strip() or None,
+            "title": attrs_map.get("title", "").strip() or None,
+            "width": parse_int(attrs_map.get("width")),
+            "height": parse_int(attrs_map.get("height")),
+            "selector_hint": build_selector_hint(tag, class_names, element_id),
+            "role_hint": role_hint,
+        }
+        return image
 
 def normalize_text(value: str) -> str:
     return " ".join(value.split()).strip()
@@ -254,6 +286,29 @@ def build_selector_hint(tag: str, class_names: str, element_id: str) -> str:
         class_part = f".{first_class}"
     id_part = f"#{element_id}" if element_id else ""
     return f"{tag}{id_part}{class_part}"
+
+
+def infer_role_hint(value: str) -> str | None:
+    lowered = value.lower()
+    for keyword, role in {
+        "hero": "hero",
+        "gallery": "gallery",
+        "card": "card",
+        "feature": "feature",
+        "amenit": "feature",
+    }.items():
+        if keyword in lowered:
+            return role
+    return None
+
+
+def parse_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def build_ssl_context() -> ssl.SSLContext:
@@ -319,10 +374,19 @@ def crawl_page(path: str, page_url: str, detect_widgets: bool) -> CrawledPageArt
         "counts": summarize_layout_counts(parser.layout_regions),
     }
     text_blocks = parser.text_blocks[:12]
+    images = parser.images[:16]
+    media_text_regions = infer_media_text_regions(layout["regions"], images, text_blocks)[:12]
     widget_matches = sorted(parser.widget_signals) if detect_widgets else []
     unknown_regions = max(parser.interactive_markers - len(widget_matches), 0)
     html_excerpt = extract_html_excerpt(fetch.html)
-    document_candidate = build_document_candidate(title_guess, widget_matches, layout, text_blocks)
+    document_candidate = build_document_candidate(
+        title_guess,
+        widget_matches,
+        layout,
+        text_blocks,
+        images,
+        media_text_regions,
+    )
 
     if schema_types:
         extraction_notes.append(f"discovered schema types: {', '.join(schema_types)}")
@@ -359,6 +423,8 @@ def crawl_page(path: str, page_url: str, detect_widgets: bool) -> CrawledPageArt
         schema_types=schema_types,
         layout=layout,
         text_blocks=text_blocks,
+        images=images,
+        media_text_regions=media_text_regions,
         html_excerpt=html_excerpt,
         document_candidate=document_candidate,
         internal_links=[path for path, _anchor_text in unique_links(parser.internal_links)[:24]],
@@ -371,14 +437,37 @@ def build_document_candidate(
     widget_matches: list[str],
     layout: dict[str, Any],
     text_blocks: list[str],
+    images: list[dict[str, Any]],
+    media_text_regions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
+    for region in media_text_regions[:4]:
+        blocks.append(
+            {
+                "kind": "media_text",
+                "selector_hint": region.get("selector_hint"),
+                "orientation": region.get("orientation"),
+                "image": region.get("image"),
+                "text": region.get("text"),
+            }
+        )
+
     for widget_slug in widget_matches:
         blocks.append(
             {
                 "kind": "widget",
                 "widget_slug": widget_slug,
                 "settings": {"migration_detected": True},
+            }
+        )
+
+    for image in images[:6]:
+        blocks.append(
+            {
+                "kind": "image",
+                "src": image.get("src"),
+                "alt": image.get("alt"),
+                "role": image.get("role_hint"),
             }
         )
 
@@ -405,6 +494,46 @@ def build_document_candidate(
             "main": blocks,
         },
     }
+
+
+def infer_media_text_regions(
+    layout_regions: list[dict[str, Any]],
+    images: list[dict[str, Any]],
+    text_blocks: list[str],
+) -> list[dict[str, Any]]:
+    if not images or not text_blocks:
+        return []
+
+    orientation = "image_left"
+    selector_hint = next(
+        (
+            region.get("selector_hint")
+            for region in layout_regions
+            if region.get("kind") in {"section", "article", "hero", "row"}
+        ),
+        "section.media-text",
+    )
+    all_selectors = " ".join(
+        str(region.get("selector_hint") or "") for region in layout_regions
+    ).lower()
+    if "right" in all_selectors:
+        orientation = "image_right"
+
+    heading = text_blocks[0]
+    body = " ".join(text_blocks[1:3]) if len(text_blocks) > 1 else text_blocks[0]
+
+    return [
+        {
+            "kind": "media_text",
+            "selector_hint": selector_hint,
+            "orientation": orientation,
+            "image": images[0],
+            "text": {
+                "heading": heading,
+                "body": body,
+            },
+        }
+    ]
 
 
 def extract_html_excerpt(html: str) -> str:
@@ -510,6 +639,8 @@ async def execute_site_migration(request: dict) -> dict:
                         schema_types=[],
                         layout={"regions": [], "counts": {}},
                         text_blocks=[],
+                        images=[],
+                        media_text_regions=[],
                         html_excerpt="",
                         document_candidate={"title": humanize_path(path), "regions": {"main": []}},
                         internal_links=[],
@@ -544,6 +675,8 @@ async def execute_site_migration(request: dict) -> dict:
                 schema_types=[],
                 layout={"regions": [], "counts": {}},
                 text_blocks=[],
+                images=[],
+                media_text_regions=[],
                 html_excerpt="",
                 document_candidate={"title": "Homepage", "regions": {"main": []}},
                 internal_links=[],

@@ -2295,6 +2295,16 @@ fn imported_page_draft_from_migration_page(
         .get("html_excerpt")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
+    let images = artifact
+        .get("images")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let media_text_regions = artifact
+        .get("media_text_regions")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
     let document_candidate = artifact
         .get("document_candidate")
         .cloned()
@@ -2328,6 +2338,8 @@ fn imported_page_draft_from_migration_page(
         schema_types,
         layout,
         text_blocks,
+        images,
+        media_text_regions,
         html_excerpt,
         document_candidate,
     }
@@ -2674,6 +2686,8 @@ fn migration_page_artifact_row_from_result(
             "schema_types": object.get("schema_types").cloned().unwrap_or_else(|| serde_json::json!([])),
             "layout": object.get("layout").cloned().unwrap_or_else(|| serde_json::json!({ "regions": [], "counts": {} })),
             "text_blocks": object.get("text_blocks").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "images": object.get("images").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "media_text_regions": object.get("media_text_regions").cloned().unwrap_or_else(|| serde_json::json!([])),
             "html_excerpt": object.get("html_excerpt").cloned().unwrap_or(serde_json::Value::Null),
             "document_candidate": object.get("document_candidate").cloned().unwrap_or_else(|| serde_json::json!({ "regions": { "main": [] } })),
             "internal_links": object.get("internal_links").cloned().unwrap_or_else(|| serde_json::json!([])),

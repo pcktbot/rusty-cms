@@ -236,6 +236,66 @@ impl RenderEngine {
             .as_ref()
             .map(|html| escape_html(html))
             .unwrap_or_else(|| "no HTML excerpt captured".to_owned());
+        let images = if page.images.is_empty() {
+            "<li>no images captured</li>".to_owned()
+        } else {
+            page.images
+                .iter()
+                .take(8)
+                .map(|image| {
+                    let src = image.get("src").and_then(Value::as_str).unwrap_or("");
+                    let alt = image.get("alt").and_then(Value::as_str).unwrap_or("");
+                    let role = image
+                        .get("role_hint")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image");
+                    format!(
+                        "<li>{} <span class=\"muted\">{}</span><br><span class=\"muted\">{}</span></li>",
+                        escape_html(role),
+                        escape_html(alt),
+                        escape_html(src)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        let media_text_regions = if page.media_text_regions.is_empty() {
+            "<li>no image-plus-copy regions captured</li>".to_owned()
+        } else {
+            page.media_text_regions
+                .iter()
+                .take(6)
+                .map(|region| {
+                    let orientation = region
+                        .get("orientation")
+                        .and_then(Value::as_str)
+                        .unwrap_or("media_text");
+                    let heading = region
+                        .get("text")
+                        .and_then(|text| text.get("heading"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let body = region
+                        .get("text")
+                        .and_then(|text| text.get("body"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let alt = region
+                        .get("image")
+                        .and_then(|image| image.get("alt"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    format!(
+                        "<li>{} <span class=\"muted\">{}</span><br>{}<br><span class=\"muted\">{}</span></li>",
+                        escape_html(orientation),
+                        escape_html(heading),
+                        escape_html(body),
+                        escape_html(alt)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        };
 
         Ok(format!(
             r#"<!doctype html>
@@ -370,6 +430,14 @@ impl RenderEngine {
           <h2>Text excerpts</h2>
           <ul>{text_blocks}</ul>
         </article>
+        <article class="panel">
+          <h2>Images</h2>
+          <ul>{images}</ul>
+        </article>
+        <article class="panel">
+          <h2>Media + Text</h2>
+          <ul>{media_text_regions}</ul>
+        </article>
       </section>
       <section class="panel wide">
         <h2>HTML excerpt</h2>
@@ -398,6 +466,8 @@ impl RenderEngine {
             schema_types = schema_types,
             layout_regions = layout_regions,
             text_blocks = text_blocks,
+            images = images,
+            media_text_regions = media_text_regions,
             html_excerpt = html_excerpt,
         ))
     }
@@ -482,6 +552,19 @@ mod tests {
                 "regions": [{ "kind": "hero", "selector_hint": "section.hero-banner" }]
             }),
             text_blocks: vec!["Warm residences near the lake.".to_owned()],
+            images: vec![serde_json::json!({
+                "src": "https://example.com/hero.jpg",
+                "alt": "Residents at the pool",
+                "role_hint": "hero"
+            })],
+            media_text_regions: vec![serde_json::json!({
+                "orientation": "image_left",
+                "image": { "alt": "Residents at the pool" },
+                "text": {
+                    "heading": "Resort style living",
+                    "body": "Warm residences near the lake."
+                }
+            })],
             html_excerpt: Some("<main><section>Warm residences</section></main>".to_owned()),
             document_candidate: serde_json::json!({
                 "regions": { "main": [] }
@@ -495,5 +578,6 @@ mod tests {
         assert!(html.contains("change_set: cccccccc-cccc-cccc-cccc-cccccccccccc"));
         assert!(html.contains("hero-banner"));
         assert!(html.contains("Schema types"));
+        assert!(html.contains("Media + Text"));
     }
 }

@@ -136,7 +136,8 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
           <head><title>Floor Plans</title></head>
           <body>
             <main>
-              <section class="row hero-banner">
+              <section class="row hero-banner feature">
+                <img src="/images/floorplans-hero.jpg" alt="Bright living room" />
                 <h1>Choose Your Layout</h1>
                 <p>Browse studio, one-, and two-bedroom homes.</p>
               </section>
@@ -193,6 +194,8 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["migration"]["pages"][1]["path"], "/floorplans")
         self.assertIn("WebPage", result["migration"]["pages"][0]["schema_types"])
         self.assertTrue(result["migration"]["pages"][1]["layout"]["regions"])
+        self.assertTrue(result["migration"]["pages"][1]["images"])
+        self.assertTrue(result["migration"]["pages"][1]["media_text_regions"])
 
     def test_discovery_extracts_internal_links_and_widget_signals(self):
         html = """
@@ -250,6 +253,38 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FAQPage", page.schema_types)
         self.assertTrue(page.layout["regions"])
         self.assertTrue(page.document_candidate["regions"]["main"])
+
+    def test_crawl_page_extracts_images_and_media_text_regions(self):
+        html = """
+        <html>
+          <head><title>Features</title></head>
+          <body>
+            <section class="feature-row image-right">
+              <img src="/images/lounge.jpg" alt="Resident lounge seating" />
+              <h2>Made for gathering</h2>
+              <p>Comfortable shared spaces and natural light throughout.</p>
+            </section>
+          </body>
+        </html>
+        """
+        with patch(
+            "rusty_cms_temporal.migrations.fetch_html",
+            return_value=FetchResult(
+                source_url="https://example.com/features",
+                final_url="https://example.com/features",
+                http_status=200,
+                content_type="text/html",
+                html=html,
+            ),
+        ):
+            page = crawl_page("/features", "https://example.com/features", detect_widgets=True)
+
+        self.assertEqual(page.images[0]["alt"], "Resident lounge seating")
+        self.assertTrue(page.media_text_regions)
+        self.assertIn(page.media_text_regions[0]["orientation"], {"image_left", "image_right"})
+        self.assertTrue(
+            any(block["kind"] == "media_text" for block in page.document_candidate["regions"]["main"])
+        )
 
     def test_build_ssl_context_can_disable_verification(self):
         with patch.dict(
