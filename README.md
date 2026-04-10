@@ -10,7 +10,7 @@ Current direction:
 - Static publish target on persistent disk, with optional S3-backed object storage later.
 - Async workflow orchestration via Temporal-managed jobs and agent-driven requests.
 
-See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/architecture.md), [`docs/roadmap.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/roadmap.md), and [`docs/implementation-plan.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/implementation-plan.md).
+See [`docs/architecture.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/architecture.md), [`docs/roadmap.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/roadmap.md), [`docs/implementation-plan.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/implementation-plan.md), and [`docs/local-commands.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/local-commands.md).
 
 Quick start:
 
