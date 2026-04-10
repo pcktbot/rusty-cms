@@ -12,6 +12,7 @@ use cms_core::draft::{
     DraftPreviewRef, DraftResourceKind, ImportedPageDraft,
 };
 use cms_core::health::HealthStatus;
+use cms_core::page::{PageDocument, PageSeo};
 use cms_core::site::{SiteKind, SiteSnapshotRef};
 use cms_core::widget::{
     HtmlSupportMode, WidgetCommand, WidgetDefinition, WidgetDefinitionRef, WidgetDefinitionVersion,
@@ -19,8 +20,9 @@ use cms_core::widget::{
 };
 use cms_db::{
     models::{
-        AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow,
-        MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow, WorkflowRequestRow,
+        AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, DraftPageDocumentRow,
+        MigrationJobRow, MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow,
+        WorkflowRequestRow,
     },
     repositories::PgRepository,
 };
@@ -930,12 +932,12 @@ async fn import_migration_to_draft(
             page_id: None,
             migration_job_id: Some(record.id),
             migration_page_id: Some(page.id),
-            change_kind: draft_change_kind_name(DraftChangeKind::UpsertPageShell).to_owned(),
+            change_kind: draft_change_kind_name(DraftChangeKind::UpsertPageDocument).to_owned(),
             resource_kind: draft_resource_kind_name(DraftResourceKind::Page).to_owned(),
             resource_key: page.path.clone(),
             status: draft_change_status_name(DraftChangeStatus::Imported).to_owned(),
             title: imported_page.title.clone(),
-            payload: sqlx::types::Json(serde_json::to_value(imported_page).map_err(|error| {
+            payload: sqlx::types::Json(serde_json::to_value(&imported_page).map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
@@ -949,6 +951,42 @@ async fn import_migration_to_draft(
 
         let inserted = repository
             .insert_draft_change(&change_row)
+            .await
+            .map_err(json_db_error)?;
+
+        let seo = page_seo_json(&imported_page.page_document, &imported_page.seo)?;
+        let draft_page_document_row = DraftPageDocumentRow {
+            id: Uuid::new_v4(),
+            change_set_id,
+            draft_change_id: Some(inserted.id),
+            page_id: None,
+            path: imported_page.path.clone(),
+            slug: imported_page.slug.clone(),
+            title: imported_page.title.clone(),
+            template_definition_id: None,
+            template_key: imported_page.page_document.template_key.clone(),
+            schema_version: imported_page.page_document.schema_version,
+            seo: sqlx::types::Json(seo),
+            document: sqlx::types::Json(
+                serde_json::to_value(&imported_page.page_document).map_err(|error| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("failed to encode imported page document: {error}")
+                        })),
+                    )
+                })?,
+            ),
+            metadata: sqlx::types::Json(serde_json::json!({
+                "migration_job_id": record.id,
+                "migration_page_id": page.id,
+                "import_source": "migration_artifact",
+            })),
+            created_at: now,
+            updated_at: now,
+        };
+        repository
+            .insert_draft_page_document(&draft_page_document_row)
             .await
             .map_err(json_db_error)?;
 
@@ -2309,6 +2347,7 @@ fn imported_page_draft_from_migration_page(
         .get("document_candidate")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({ "regions": { "main": [] } }));
+    let page_document = page_document_from_artifact(&artifact, &page.title_guess);
 
     let summary = if page.widget_matches.is_empty() {
         format!(
@@ -2341,8 +2380,120 @@ fn imported_page_draft_from_migration_page(
         images,
         media_text_regions,
         html_excerpt,
+        page_document,
         document_candidate,
     }
+}
+
+fn page_document_from_artifact(artifact: &serde_json::Value, page_title: &str) -> PageDocument {
+    let document_candidate = artifact
+        .get("document_candidate")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "regions": { "main": [] } }));
+    let mut document = PageDocument::from_candidate(&document_candidate);
+
+    if document.is_empty() {
+        let mut fallback_blocks = Vec::new();
+
+        if let Some(media_text_regions) = artifact
+            .get("media_text_regions")
+            .and_then(serde_json::Value::as_array)
+        {
+            for (index, region) in media_text_regions.iter().enumerate() {
+                fallback_blocks.push(serde_json::json!({
+                    "id": format!("media_text_{}", index + 1),
+                    "kind": "primitive",
+                    "primitive_type": "media_text",
+                    "content": region,
+                }));
+            }
+        }
+
+        if fallback_blocks.is_empty()
+            && let Some(images) = artifact.get("images").and_then(serde_json::Value::as_array)
+        {
+            for (index, image) in images.iter().take(4).enumerate() {
+                fallback_blocks.push(serde_json::json!({
+                    "id": format!("image_{}", index + 1),
+                    "kind": "primitive",
+                    "primitive_type": "image",
+                    "content": image,
+                }));
+            }
+        }
+
+        if fallback_blocks.is_empty()
+            && let Some(text_blocks) = artifact
+                .get("text_blocks")
+                .and_then(serde_json::Value::as_array)
+        {
+            for (index, text) in text_blocks.iter().take(4).enumerate() {
+                fallback_blocks.push(serde_json::json!({
+                    "id": format!("text_{}", index + 1),
+                    "kind": "primitive",
+                    "primitive_type": "rich_text",
+                    "content": {
+                        "text": text
+                    },
+                }));
+            }
+        }
+
+        document = PageDocument::from_candidate(&serde_json::json!({
+            "template_key": "marketing-default",
+            "metadata": {
+                "import_title": page_title,
+            },
+            "regions": {
+                "main": fallback_blocks
+            }
+        }));
+    }
+
+    document
+}
+
+fn page_seo_json(
+    document: &PageDocument,
+    fallback: &serde_json::Value,
+) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
+    let parsed = if fallback.is_null()
+        || fallback.as_object().is_some_and(|object| object.is_empty())
+    {
+        PageSeo::default()
+    } else {
+        serde_json::from_value::<PageSeo>(fallback.clone()).unwrap_or_else(|_| PageSeo::default())
+    };
+
+    let seo = PageSeo {
+        schema_types: if parsed.schema_types.is_empty() {
+            fallback
+                .get("schema_types")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            parsed.schema_types
+        },
+        metadata: serde_json::json!({
+            "template_key": document.template_key,
+        }),
+        ..parsed
+    };
+
+    serde_json::to_value(seo).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("failed to encode page seo: {error}")
+            })),
+        )
+    })
 }
 
 async fn store_migration_record(
@@ -2773,12 +2924,15 @@ fn draft_change_set_status_name(status: DraftChangeSetStatus) -> &'static str {
 fn draft_change_kind_name(kind: DraftChangeKind) -> &'static str {
     match kind {
         DraftChangeKind::UpsertPageShell => "upsert_page_shell",
+        DraftChangeKind::UpsertPageDocument => "upsert_page_document",
+        DraftChangeKind::ApplyPageMutation => "apply_page_mutation",
     }
 }
 
 fn draft_resource_kind_name(kind: DraftResourceKind) -> &'static str {
     match kind {
         DraftResourceKind::Page => "page",
+        DraftResourceKind::Template => "template",
     }
 }
 
@@ -2826,6 +2980,8 @@ fn parse_draft_change_set_status(value: &str) -> Result<DraftChangeSetStatus, St
 fn parse_draft_change_kind(value: &str) -> Result<DraftChangeKind, String> {
     match normalize_name(value).as_str() {
         "upsertpageshell" | "upsert_page_shell" => Ok(DraftChangeKind::UpsertPageShell),
+        "upsertpagedocument" | "upsert_page_document" => Ok(DraftChangeKind::UpsertPageDocument),
+        "applypagemutation" | "apply_page_mutation" => Ok(DraftChangeKind::ApplyPageMutation),
         _ => Err(format!("unknown draft change kind: {value}")),
     }
 }
@@ -2833,6 +2989,7 @@ fn parse_draft_change_kind(value: &str) -> Result<DraftChangeKind, String> {
 fn parse_draft_resource_kind(value: &str) -> Result<DraftResourceKind, String> {
     match normalize_name(value).as_str() {
         "page" => Ok(DraftResourceKind::Page),
+        "template" => Ok(DraftResourceKind::Template),
         _ => Err(format!("unknown draft resource kind: {value}")),
     }
 }

@@ -70,6 +70,33 @@ pub struct PageDocumentRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct TemplateDefinitionRow {
+    pub id: Uuid,
+    pub site_id: Option<Uuid>,
+    pub slug: String,
+    pub display_name: String,
+    pub schema_version: i32,
+    pub metadata: Json<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct TemplateTargetRow {
+    pub id: Uuid,
+    pub template_definition_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    pub position: i32,
+    pub allows_primitives: Json<serde_json::Value>,
+    pub allows_widgets: bool,
+    pub max_blocks: Option<i32>,
+    pub metadata: Json<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
 pub struct PublishJobRow {
     pub id: Uuid,
     pub site_id: Uuid,
@@ -173,6 +200,25 @@ pub struct DraftChangeRow {
     pub status: String,
     pub title: String,
     pub payload: Json<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct DraftPageDocumentRow {
+    pub id: Uuid,
+    pub change_set_id: Uuid,
+    pub draft_change_id: Option<Uuid>,
+    pub page_id: Option<Uuid>,
+    pub path: String,
+    pub slug: String,
+    pub title: String,
+    pub template_definition_id: Option<Uuid>,
+    pub template_key: String,
+    pub schema_version: i32,
+    pub seo: Json<serde_json::Value>,
+    pub document: Json<serde_json::Value>,
+    pub metadata: Json<serde_json::Value>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }

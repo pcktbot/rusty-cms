@@ -1,5 +1,6 @@
 use cms_core::{
     draft::{DraftPreviewRef, ImportedPageDraft},
+    page::{BlockKind, PageBlock, PageDocument},
     site::SiteSnapshotRef,
 };
 use serde_json::Value;
@@ -296,6 +297,12 @@ impl RenderEngine {
                 .collect::<Vec<_>>()
                 .join("")
         };
+        let effective_document = if page.page_document.is_empty() {
+            PageDocument::from_candidate(&page.document_candidate)
+        } else {
+            page.page_document.clone()
+        };
+        let page_document_summary = render_page_document_summary(&effective_document);
 
         Ok(format!(
             r#"<!doctype html>
@@ -398,6 +405,11 @@ impl RenderEngine {
 
       <section class="grid">
         <article class="panel">
+          <h2>Page document</h2>
+          <p class="meta">template: {template_key}</p>
+          <ul>{page_document_summary}</ul>
+        </article>
+        <article class="panel">
           <h2>Widget signals</h2>
           <div>{widget_badges}</div>
           <ul>{widget_matches}</ul>
@@ -448,6 +460,8 @@ impl RenderEngine {
 </html>"#,
             title = page.title,
             path = page.path,
+            template_key = effective_document.template_key,
+            page_document_summary = page_document_summary,
             change_set_id = preview.change_set_id,
             site_id = preview.site_id,
             branch_name = preview.branch_name,
@@ -501,11 +515,48 @@ fn render_seo_bits(seo: &Value) -> String {
     }
 }
 
+fn render_page_document_summary(document: &PageDocument) -> String {
+    if document.slots.is_empty() {
+        return "<li>no slots present</li>".to_owned();
+    }
+
+    document
+        .slots
+        .iter()
+        .map(|(slot_name, blocks)| {
+            let summary = if blocks.is_empty() {
+                "empty".to_owned()
+            } else {
+                blocks
+                    .iter()
+                    .map(page_block_summary)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                "<li>{} <span class=\"muted\">{}</span></li>",
+                escape_html(slot_name),
+                summary
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn page_block_summary(block: &PageBlock) -> String {
+    let prefix = match block.kind {
+        BlockKind::Primitive => "primitive",
+        BlockKind::Widget => "widget",
+    };
+    format!("{}:{}", prefix, escape_html(&block.block_type))
+}
+
 #[cfg(test)]
 mod tests {
     use super::RenderEngine;
     use cms_core::{
         draft::{DraftPreviewRef, ImportedPageDraft},
+        page::PageDocument,
         site::SiteSnapshotRef,
     };
     use uuid::Uuid;
@@ -566,6 +617,20 @@ mod tests {
                 }
             })],
             html_excerpt: Some("<main><section>Warm residences</section></main>".to_owned()),
+            page_document: PageDocument::from_candidate(&serde_json::json!({
+                "template_key": "marketing-default",
+                "regions": {
+                    "main": [
+                        {
+                            "kind": "primitive",
+                            "primitive_type": "media_text",
+                            "content": {
+                                "heading": "Resort style living"
+                            }
+                        }
+                    ]
+                }
+            })),
             document_candidate: serde_json::json!({
                 "regions": { "main": [] }
             }),
@@ -579,5 +644,6 @@ mod tests {
         assert!(html.contains("hero-banner"));
         assert!(html.contains("Schema types"));
         assert!(html.contains("Media + Text"));
+        assert!(html.contains("Page document"));
     }
 }

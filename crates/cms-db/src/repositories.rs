@@ -1,7 +1,8 @@
 use crate::models::{
-    AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow,
-    MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow, WidgetDefinitionRow,
-    WidgetDefinitionVersionRow, WorkflowRequestRow,
+    AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, DraftPageDocumentRow,
+    MigrationJobRow, MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow,
+    TemplateDefinitionRow, TemplateTargetRow, WidgetDefinitionRow, WidgetDefinitionVersionRow,
+    WorkflowRequestRow,
 };
 use sqlx::{PgPool, query_as, query_scalar};
 use uuid::Uuid;
@@ -666,6 +667,198 @@ impl PgRepository {
         .bind(row.created_at)
         .bind(row.updated_at)
         .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn insert_draft_page_document(
+        &self,
+        row: &DraftPageDocumentRow,
+    ) -> Result<DraftPageDocumentRow, sqlx::Error> {
+        query_as::<_, DraftPageDocumentRow>(
+            r#"
+            INSERT INTO draft_page_documents (
+                id,
+                change_set_id,
+                draft_change_id,
+                page_id,
+                path,
+                slug,
+                title,
+                template_definition_id,
+                template_key,
+                schema_version,
+                seo,
+                document,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING id, change_set_id, draft_change_id, page_id, path, slug, title,
+                      template_definition_id, template_key, schema_version, seo, document,
+                      metadata, created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.change_set_id)
+        .bind(row.draft_change_id)
+        .bind(row.page_id)
+        .bind(&row.path)
+        .bind(&row.slug)
+        .bind(&row.title)
+        .bind(row.template_definition_id)
+        .bind(&row.template_key)
+        .bind(row.schema_version)
+        .bind(&row.seo)
+        .bind(&row.document)
+        .bind(&row.metadata)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn draft_page_document(
+        &self,
+        change_set_id: Uuid,
+        draft_change_id: Uuid,
+    ) -> Result<Option<DraftPageDocumentRow>, sqlx::Error> {
+        query_as::<_, DraftPageDocumentRow>(
+            r#"
+            SELECT id, change_set_id, draft_change_id, page_id, path, slug, title,
+                   template_definition_id, template_key, schema_version, seo, document,
+                   metadata, created_at, updated_at
+            FROM draft_page_documents
+            WHERE change_set_id = $1 AND draft_change_id = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(change_set_id)
+        .bind(draft_change_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn insert_template_definition(
+        &self,
+        row: &TemplateDefinitionRow,
+    ) -> Result<TemplateDefinitionRow, sqlx::Error> {
+        query_as::<_, TemplateDefinitionRow>(
+            r#"
+            INSERT INTO template_definitions (
+                id,
+                site_id,
+                slug,
+                display_name,
+                schema_version,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, site_id, slug, display_name, schema_version, metadata,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.site_id)
+        .bind(&row.slug)
+        .bind(&row.display_name)
+        .bind(row.schema_version)
+        .bind(&row.metadata)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn insert_template_target(
+        &self,
+        row: &TemplateTargetRow,
+    ) -> Result<TemplateTargetRow, sqlx::Error> {
+        query_as::<_, TemplateTargetRow>(
+            r#"
+            INSERT INTO template_targets (
+                id,
+                template_definition_id,
+                name,
+                display_name,
+                position,
+                allows_primitives,
+                allows_widgets,
+                max_blocks,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id, template_definition_id, name, display_name, position,
+                      allows_primitives, allows_widgets, max_blocks, metadata,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.template_definition_id)
+        .bind(&row.name)
+        .bind(&row.display_name)
+        .bind(row.position)
+        .bind(&row.allows_primitives)
+        .bind(row.allows_widgets)
+        .bind(row.max_blocks)
+        .bind(&row.metadata)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn list_template_definitions(
+        &self,
+        site_id: Option<Uuid>,
+    ) -> Result<Vec<TemplateDefinitionRow>, sqlx::Error> {
+        match site_id {
+            Some(site_id) => {
+                query_as::<_, TemplateDefinitionRow>(
+                    r#"
+                    SELECT id, site_id, slug, display_name, schema_version, metadata, created_at, updated_at
+                    FROM template_definitions
+                    WHERE site_id = $1 OR site_id IS NULL
+                    ORDER BY site_id NULLS FIRST, slug ASC
+                    "#,
+                )
+                .bind(site_id)
+                .fetch_all(&self.pool)
+                .await
+            }
+            None => {
+                query_as::<_, TemplateDefinitionRow>(
+                    r#"
+                    SELECT id, site_id, slug, display_name, schema_version, metadata, created_at, updated_at
+                    FROM template_definitions
+                    ORDER BY site_id NULLS FIRST, slug ASC
+                    "#,
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+    }
+
+    pub async fn template_targets(
+        &self,
+        template_definition_id: Uuid,
+    ) -> Result<Vec<TemplateTargetRow>, sqlx::Error> {
+        query_as::<_, TemplateTargetRow>(
+            r#"
+            SELECT id, template_definition_id, name, display_name, position, allows_primitives,
+                   allows_widgets, max_blocks, metadata, created_at, updated_at
+            FROM template_targets
+            WHERE template_definition_id = $1
+            ORDER BY position ASC, name ASC
+            "#,
+        )
+        .bind(template_definition_id)
+        .fetch_all(&self.pool)
         .await
     }
 

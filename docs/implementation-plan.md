@@ -42,7 +42,7 @@ Status legend:
 - `implemented` publish state machine domain model
 - `scaffolded` publish target model and artifact tables
 - `implemented` imported-draft preview route for migration-generated change sets
-- `scaffolded` imported-draft preview rendering with SEO, schema, layout, image, and media-text artifact display
+- `implemented` imported-draft preview rendering with SEO, schema, layout, image, media-text, and page-document summary display
 - `planned` real snapshot renderer
 - `planned` full-site static build pipeline
 - `planned` atomic release promotion on disk
@@ -127,15 +127,18 @@ Planned selective publish strategy:
 Reference: [`docs/site-building-model.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/site-building-model.md)
 
 - `implemented` high-level slot-based page and template direction in architecture and migration preview flows
+- `implemented` core Rust schemas for page documents, page SEO, block instances, responsive layout controls, and template definitions
+- `implemented` database tables for template definitions, template targets, and draft page documents
 - `scaffolded` provisional document candidates in migration artifacts
-- `planned` stable page-document schema with template targets
-- `planned` primitive catalog for content, layout, and viewport-attached blocks
-- `planned` block instance schema with content, layout, visibility, and metadata payloads
+- `scaffolded` draft import path that materializes persisted draft page documents from migration artifacts
+- `implemented` primitive catalog shape for content, layout, and viewport-attached blocks in code
+- `implemented` block instance schema with content, layout, visibility, and metadata payloads in code
 - `planned` target compatibility and structural validation rules
 
 ## Authoring and editing
 
 - `implemented` draft change-set and draft-change persistence foundation
+- `implemented` typed page-mutation schema for replace-document, SEO updates, and block-level mutations
 - `scaffolded` widget-command route contract for future mutations
 - `planned` block-level typed mutation commands
 - `planned` inline editing for text and lightweight content fields
@@ -179,8 +182,8 @@ Reference: [`docs/site-building-model.md`](/Users/david.miller/Documents/current
 
 ## Immediate next steps
 
-1. Promote document candidates into a stable page-document schema with template targets and primitive blocks.
-2. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
-3. Replace widget-command stubs with real draft block mutations on top of selected base snapshots.
-4. Add preview cache keys and Redis-backed invalidation for draft page renders.
-5. Replace manual migration discovery sync with automatic workflow result ingestion.
+1. Replace provisional `document_candidate` JSON generation with richer stable page-document generation during migration import.
+2. Add template-definition seed data and read routes so page documents can bind to real templates instead of a fallback template key.
+3. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
+4. Replace widget-command stubs with real draft block mutations on top of selected base snapshots.
+5. Add preview cache keys and Redis-backed invalidation for draft page renders.
