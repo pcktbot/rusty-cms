@@ -344,7 +344,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/runtime", get(runtime_info))
         .route("/api/sites", get(sites))
-        .route("/api/migrations", post(create_migration_without_site))
+        .route(
+            "/api/migrations",
+            get(list_migrations).post(create_migration_without_site),
+        )
         .route("/api/sites/{site_id}/branches", get(site_branches))
         .route(
             "/api/sites/{site_id}/branches/{branch_name}/head",
@@ -715,6 +718,43 @@ async fn migration_detail(
         .map_err(internal_db_error)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(migration_summary(&record)))
+}
+
+async fn list_migrations(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<MigrationJobSummary>>, StatusCode> {
+    if let Some(repository) = state.repository.as_ref() {
+        let rows = repository
+            .list_migration_jobs()
+            .await
+            .map_err(internal_db_error)?;
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let page_count = repository
+                .migration_pages(row.id)
+                .await
+                .map_err(internal_db_error)?
+                .len();
+            let record =
+                migration_record_from_rows(row, Vec::new()).map_err(internal_mapping_error)?;
+            let mut summary = migration_summary(&record);
+            summary.page_count = page_count;
+            summaries.push(summary);
+        }
+        Ok(Json(summaries))
+    } else {
+        let mut records = state
+            .migrations
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(Json(
+            records.iter().map(migration_summary).collect::<Vec<_>>(),
+        ))
+    }
 }
 
 async fn migration_pages(
@@ -1838,8 +1878,19 @@ async fn migration_console() -> Html<String> {
 
           <section class="card">
             <h2>Review</h2>
+            <div class="row-2" style="margin: 12px 0 14px;">
+              <label>
+                Existing Migration
+                <select id="migration-id"></select>
+              </label>
+              <label>
+                Extraction Workflow ID
+                <input id="extraction-workflow-id" placeholder="cms-..." />
+              </label>
+            </div>
             <div class="actions" style="margin: 12px 0 14px;">
-              <button type="button" class="secondary" id="load-latest">Load latest job</button>
+              <button type="button" class="secondary" id="refresh-migrations">Refresh migrations</button>
+              <button type="button" class="secondary" id="load-selected">Load selected job</button>
               <button type="button" class="secondary" id="sync-discovery">Sync discovery</button>
               <button type="button" class="secondary" id="extract-pages">Extract page documents</button>
               <button type="button" class="secondary" id="sync-extraction">Sync extraction</button>
@@ -1858,6 +1909,8 @@ async fn migration_console() -> Html<String> {
       const logEl = document.getElementById("log");
       const targetModeEl = document.getElementById("target-mode");
       const siteSelect = document.getElementById("site-id");
+      const migrationSelect = document.getElementById("migration-id");
+      const extractionWorkflowInput = document.getElementById("extraction-workflow-id");
       const summaryEl = document.getElementById("summary");
       const pagesEl = document.getElementById("pages");
       let latestMigrationId = null;
@@ -1880,6 +1933,7 @@ async fn migration_console() -> Html<String> {
           <p><strong>status</strong>: ${job.status}</p>
           <p><strong>homepage</strong>: ${job.homepage_url}</p>
           <p><strong>page_count</strong>: ${job.page_count}</p>
+          <p><strong>discovery workflow</strong>: ${job.workflow_id}</p>
         `;
         summaryEl.appendChild(block);
 
@@ -1945,10 +1999,38 @@ async fn migration_console() -> Html<String> {
         const job = await fetchJson(`/api/migrations/${migrationId}`);
         const pages = await fetchJson(`/api/migrations/${migrationId}/pages`);
         latestMigrationId = migrationId;
+        migrationSelect.value = migrationId;
         renderSummary(job);
         renderPages(pages);
         setLog(job);
         setStatus(`loaded ${migrationId}`);
+      }
+
+      async function loadMigrations() {
+        setStatus("loading migrations");
+        const jobs = await fetchJson("/api/migrations");
+        migrationSelect.innerHTML = "";
+        if (!jobs.length) {
+          const option = document.createElement("option");
+          option.textContent = "No migrations found";
+          option.value = "";
+          migrationSelect.appendChild(option);
+          setStatus("ready");
+          return;
+        }
+
+        for (const job of jobs) {
+          const option = document.createElement("option");
+          option.value = job.id;
+          option.textContent = `${job.created_at} | ${job.status} | ${job.homepage_url}`;
+          migrationSelect.appendChild(option);
+        }
+
+        if (!latestMigrationId && jobs[0]) {
+          latestMigrationId = jobs[0].id;
+          migrationSelect.value = latestMigrationId;
+        }
+        setStatus("ready");
       }
 
       document.getElementById("refresh-sites").addEventListener("click", async () => {
@@ -1960,14 +2042,24 @@ async fn migration_console() -> Html<String> {
         }
       });
 
-      document.getElementById("load-latest").addEventListener("click", async () => {
-        if (!latestMigrationId) {
+      document.getElementById("refresh-migrations").addEventListener("click", async () => {
+        try {
+          await loadMigrations();
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("load-selected").addEventListener("click", async () => {
+        const migrationId = migrationSelect.value || latestMigrationId;
+        if (!migrationId) {
           setStatus("idle");
-          setLog("No migration job has been created in this console session yet.");
+          setLog("No migration job is selected.");
           return;
         }
         try {
-          await loadMigration(latestMigrationId);
+          await loadMigration(migrationId);
         } catch (error) {
           setStatus("error");
           setLog(String(error));
@@ -2045,6 +2137,7 @@ async fn migration_console() -> Html<String> {
             method: "POST"
           });
           latestExtractionWorkflowId = result.workflow_id;
+          extractionWorkflowInput.value = result.workflow_id;
           setLog(result);
           setStatus(`extraction started: ${result.workflow_id}`);
         } catch (error) {
@@ -2059,9 +2152,10 @@ async fn migration_console() -> Html<String> {
           setLog("No migration selected.");
           return;
         }
-        if (!latestExtractionWorkflowId) {
+        const workflowId = extractionWorkflowInput.value.trim() || latestExtractionWorkflowId;
+        if (!workflowId) {
           setStatus("idle");
-          setLog("No extraction workflow has been started in this console session yet.");
+          setLog("No extraction workflow id is available yet.");
           return;
         }
         try {
@@ -2072,7 +2166,7 @@ async fn migration_console() -> Html<String> {
               "content-type": "application/json"
             },
             body: JSON.stringify({
-              workflow_id: latestExtractionWorkflowId
+              workflow_id: workflowId
             })
           });
           setLog(result);
@@ -2127,7 +2221,9 @@ async fn migration_console() -> Html<String> {
           });
           latestMigrationId = result.migration_id;
           latestExtractionWorkflowId = null;
+          extractionWorkflowInput.value = "";
           setLog(result);
+          await loadMigrations();
           await loadMigration(result.migration_id);
         } catch (error) {
           setStatus("error");
@@ -2135,7 +2231,7 @@ async fn migration_console() -> Html<String> {
         }
       });
 
-      loadSites().catch((error) => {
+      Promise.all([loadSites(), loadMigrations()]).catch((error) => {
         setStatus("error");
         setLog(String(error));
       });

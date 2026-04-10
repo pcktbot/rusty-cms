@@ -238,7 +238,7 @@ impl RenderEngine {
             .map(|html| escape_html(html))
             .unwrap_or_else(|| "no HTML excerpt captured".to_owned());
         let images = if page.images.is_empty() {
-            "<li>no images captured</li>".to_owned()
+            "<li>no assets captured</li>".to_owned()
         } else {
             page.images
                 .iter()
@@ -246,15 +246,12 @@ impl RenderEngine {
                 .map(|image| {
                     let src = image.get("src").and_then(Value::as_str).unwrap_or("");
                     let alt = image.get("alt").and_then(Value::as_str).unwrap_or("");
-                    let role = image
-                        .get("role_hint")
-                        .and_then(Value::as_str)
-                        .unwrap_or("image");
+                    let file_name = file_name_from_path(src);
+                    let alt_display = if alt.is_empty() { "no alt text" } else { alt };
                     format!(
-                        "<li>{} <span class=\"muted\">{}</span><br><span class=\"muted\">{}</span></li>",
-                        escape_html(role),
-                        escape_html(alt),
-                        escape_html(src)
+                        "<li>{}<br><span class=\"muted\">{}</span></li>",
+                        escape_html(alt_display),
+                        escape_html(&file_name)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -356,9 +353,9 @@ impl RenderEngine {
         font-size: 2rem;
         line-height: 1;
       }}
-      .grid {{
+      .stack {{
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: 1fr;
         gap: 14px;
         margin-top: 16px;
       }}
@@ -403,7 +400,7 @@ impl RenderEngine {
         <p class="meta">{summary}</p>
       </section>
 
-      <section class="grid">
+      <section class="stack">
         <article class="panel">
           <h2>Page document</h2>
           <p class="meta">template: {template_key}</p>
@@ -443,7 +440,7 @@ impl RenderEngine {
           <ul>{text_blocks}</ul>
         </article>
         <article class="panel">
-          <h2>Images</h2>
+          <h2>Assets</h2>
           <ul>{images}</ul>
         </article>
         <article class="panel">
@@ -492,6 +489,15 @@ fn escape_html(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn file_name_from_path(value: &str) -> String {
+    value
+        .rsplit('/')
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or(value)
+        .to_owned()
 }
 
 fn render_seo_bits(seo: &Value) -> String {

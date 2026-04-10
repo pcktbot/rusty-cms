@@ -479,6 +479,21 @@ impl PgRepository {
         .await
     }
 
+    pub async fn list_migration_jobs(&self) -> Result<Vec<MigrationJobRow>, sqlx::Error> {
+        query_as::<_, MigrationJobRow>(
+            r#"
+            SELECT id, site_id, workflow_request_id, workflow_id, branch_name, homepage_url,
+                   client_id, location_id, legacy_api_profile, status, options, warnings,
+                   created_at, approved_at
+            FROM migration_jobs
+            ORDER BY created_at DESC
+            LIMIT 50
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     pub async fn migration_pages(
         &self,
         migration_job_id: Uuid,

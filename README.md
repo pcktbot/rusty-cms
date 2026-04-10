@@ -31,6 +31,7 @@ Useful API routes:
 
 - `GET /api/runtime`
 - `GET /api/sites`
+- `GET /api/migrations`
 - `GET /api/sites/:site_id/branches`
 - `GET /api/sites/:site_id/branches/:branch_name/head`
 - `POST /api/sites/:site_id/pages/:page_id/widget-commands`
