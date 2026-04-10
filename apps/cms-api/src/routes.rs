@@ -2701,15 +2701,15 @@ fn agent_runtime_name(runtime: AgentRuntime) -> &'static str {
 
 fn internal_db_error(error: sqlx::Error) -> StatusCode {
     error!(error = %error, "database query failed");
-    StatusCode::INTERNAL_SERVER_ERROR
+    db_error_status(&error)
 }
 
 fn json_db_error(error: sqlx::Error) -> (StatusCode, Json<serde_json::Value>) {
     error!(error = %error, "database query failed");
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
+        db_error_status(&error),
         Json(serde_json::json!({
-            "error": "database query failed"
+            "error": db_error_message(&error)
         })),
     )
 }
@@ -2727,6 +2727,44 @@ fn json_mapping_error(error: String) -> (StatusCode, Json<serde_json::Value>) {
 fn internal_mapping_error(error: String) -> StatusCode {
     error!(error = %error, "database value mapping failed");
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn db_error_status(error: &sqlx::Error) -> StatusCode {
+    match error {
+        sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
+        sqlx::Error::Database(database_error) => match database_error.code().as_deref() {
+            Some("23505") => StatusCode::CONFLICT,
+            Some("23503") | Some("23502") | Some("23514") => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn db_error_message(error: &sqlx::Error) -> String {
+    match error {
+        sqlx::Error::RowNotFound => "record was not found".to_owned(),
+        sqlx::Error::Database(database_error) => {
+            let code = database_error
+                .code()
+                .map(|code| code.into_owned())
+                .unwrap_or_default();
+            let detail = database_error
+                .message()
+                .trim()
+                .trim_end_matches('.')
+                .to_owned();
+            match code.as_str() {
+                "23505" => format!("duplicate value violates a unique constraint: {detail}"),
+                "23503" => format!("referenced record is missing: {detail}"),
+                "23502" => format!("required field is missing: {detail}"),
+                "23514" => format!("database check constraint failed: {detail}"),
+                _ if !detail.is_empty() => detail,
+                _ => "database query failed".to_owned(),
+            }
+        }
+        _ => "database query failed".to_owned(),
+    }
 }
 
 fn sample_widget_command() -> WidgetCommand {
