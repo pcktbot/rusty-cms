@@ -42,6 +42,14 @@ WRAPPER_KEYWORDS = {
     "page-shell",
     "content-shell",
 }
+CONTENT_ROOT_KEYWORDS = {
+    "drop-target-main",
+    "drop-target-before-main",
+    "drop-target-after-main",
+    "main-content",
+    "page-content",
+    "content-primary",
+}
 
 
 @dataclass(slots=True)
@@ -276,9 +284,11 @@ class PageParser(HTMLParser):
 
 
 class MainContentParser(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, allow_body_fallback: bool = False) -> None:
         super().__init__(convert_charrefs=True)
-        self._inside_main = False
+        self.allow_body_fallback = allow_body_fallback
+        self._active_root_depth = 0
+        self._entered_explicit_root = False
         self._stack: list[dict[str, Any]] = []
         self._regions: list[dict[str, Any]] = []
         self._region_counter = 0
@@ -292,12 +302,37 @@ class MainContentParser(HTMLParser):
         class_names = attrs_map.get("class", "")
         element_id = attrs_map.get("id", "")
 
-        if tag == "main" and not self._inside_main:
-            self._inside_main = True
-            self._stack.append({"tag": tag, "wrapper": False, "region_index": None})
+        is_root = tag == "main" or is_content_root_marker(tag, class_names, element_id)
+        if is_root:
+            self._active_root_depth += 1
+            self._entered_explicit_root = True
+            self._stack.append(
+                {
+                    "tag": tag,
+                    "wrapper": True,
+                    "region_index": None,
+                    "root_boundary": True,
+                }
+            )
             return
 
-        if not self._inside_main:
+        if (
+            self.allow_body_fallback
+            and not self._entered_explicit_root
+            and tag == "body"
+        ):
+            self._active_root_depth += 1
+            self._stack.append(
+                {
+                    "tag": tag,
+                    "wrapper": True,
+                    "region_index": None,
+                    "root_boundary": True,
+                }
+            )
+            return
+
+        if self._active_root_depth <= 0:
             return
 
         parent_region_index = self._current_region_index()
@@ -327,21 +362,21 @@ class MainContentParser(HTMLParser):
                 "tag": tag,
                 "wrapper": wrapper,
                 "region_index": region_index,
+                "root_boundary": False,
             }
         )
 
     def handle_endtag(self, tag: str) -> None:
-        if not self._inside_main:
+        if self._active_root_depth <= 0:
             return
 
         if self._stack:
-            self._stack.pop()
-
-        if tag == "main":
-            self._inside_main = False
+            node = self._stack.pop()
+            if node.get("root_boundary"):
+                self._active_root_depth = max(self._active_root_depth - 1, 0)
 
     def handle_data(self, data: str) -> None:
-        if not self._inside_main:
+        if self._active_root_depth <= 0:
             return
 
         region_index = self._current_region_index()
@@ -377,6 +412,7 @@ class MainContentParser(HTMLParser):
             if node["region_index"] is not None:
                 return int(node["region_index"])
         return None
+
 
 def normalize_text(value: str) -> str:
     return " ".join(value.split()).strip()
@@ -425,6 +461,14 @@ def is_wrapper_container(tag: str, class_names: str, element_id: str) -> bool:
 
     lowered = f"{class_names} {element_id}".lower()
     return any(keyword in lowered for keyword in WRAPPER_KEYWORDS)
+
+
+def is_content_root_marker(tag: str, class_names: str, element_id: str) -> bool:
+    if tag not in MAIN_REGION_TAGS:
+        return False
+
+    lowered = f"{class_names} {element_id}".lower()
+    return any(keyword in lowered for keyword in CONTENT_ROOT_KEYWORDS)
 
 
 def classify_main_region(tag: str, class_names: str, element_id: str) -> str:
@@ -568,9 +612,17 @@ def crawl_page(path: str, page_url: str, detect_widgets: bool) -> CrawledPageArt
 def extract_main_regions(html: str) -> list[dict[str, Any]]:
     parser = MainContentParser()
     parser.feed(html)
+    regions = _clean_main_regions(parser.regions)
+    if regions:
+        return regions
 
+    parser = MainContentParser(allow_body_fallback=True)
+    parser.feed(html)
+    return _clean_main_regions(parser.regions)
+
+def _clean_main_regions(raw_regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     regions: list[dict[str, Any]] = []
-    for region in parser.regions:
+    for region in raw_regions:
         text_parts = region.get("text_parts", [])
         heading = region.get("heading")
         body_candidates = [part for part in text_parts if part != heading]
