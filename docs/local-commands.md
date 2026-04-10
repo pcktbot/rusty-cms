@@ -31,6 +31,7 @@ TEMPORAL_GRPC_ENDPOINT=localhost:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_RUNNER_PYTHON=/Users/david.miller/Documents/current/test-cms-rewrite/workers/temporal_runner/.venv/bin/python
 TEMPORAL_RUNNER_START_SCRIPT=/Users/david.miller/Documents/current/test-cms-rewrite/workers/temporal_runner/start_workflow.py
+TEMPORAL_RUNNER_RESULT_SCRIPT=/Users/david.miller/Documents/current/test-cms-rewrite/workers/temporal_runner/get_workflow_result.py
 ```
 
 Migration crawler TLS options:
@@ -117,9 +118,10 @@ With Temporal running:
 4. Start `cargo run -p cms-api`.
 5. Open `/migration-console`.
 6. Create a migration.
-7. Approve it if needed.
-8. Import it into a draft change set.
+7. Click `Sync discovery` after the workflow finishes.
+8. Approve it if needed.
+9. Import it into a draft change set.
 
 ## Current caveat
 
-The worker can perform real crawl discovery, but migration workflow results are not yet fully synced back into the migration tables automatically. That is the next integration step.
+Migration workflow results can now be synced into the database from the console, but that sync is still manual rather than automatic.

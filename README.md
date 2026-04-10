@@ -41,6 +41,8 @@ Useful API routes:
 - `GET /api/migrations/:migration_id`
 - `GET /api/migrations/:migration_id/pages`
 - `GET /api/migrations/:migration_id/pages/:page_id`
+- `GET /api/migrations/:migration_id/pages/:page_id/artifact`
+- `POST /api/migrations/:migration_id/sync-discovery`
 - `POST /api/migrations/:migration_id/approve`
 - `POST /api/migrations/:migration_id/import-draft`
 - `GET /api/draft-change-sets/:change_set_id`

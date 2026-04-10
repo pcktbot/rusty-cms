@@ -132,6 +132,18 @@ pub struct MigrationPageRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct MigrationPageArtifactRow {
+    pub id: Uuid,
+    pub migration_page_id: Uuid,
+    pub source_url: String,
+    pub http_status: Option<i32>,
+    pub final_url: Option<String>,
+    pub artifact: Json<serde_json::Value>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
 pub struct DraftChangeSetRow {
     pub id: Uuid,
     pub site_id: Uuid,

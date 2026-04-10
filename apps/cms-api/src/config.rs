@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub temporal_namespace: String,
     pub temporal_runner_python: String,
     pub temporal_runner_start_script: String,
+    pub temporal_runner_result_script: String,
 }
 
 impl AppConfig {
@@ -20,6 +21,8 @@ impl AppConfig {
         let workspace_dir = env!("CARGO_MANIFEST_DIR");
         let default_runner_script =
             format!("{workspace_dir}/../../workers/temporal_runner/start_workflow.py");
+        let default_result_script =
+            format!("{workspace_dir}/../../workers/temporal_runner/get_workflow_result.py");
 
         let config = Self {
             bind_host: env::var("CMS_API_HOST")
@@ -40,6 +43,10 @@ impl AppConfig {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(default_runner_script),
+            temporal_runner_result_script: env::var("TEMPORAL_RUNNER_RESULT_SCRIPT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(default_result_script),
         };
         config.validate()?;
         Ok(config)
@@ -50,6 +57,8 @@ impl AppConfig {
         let workspace_dir = env!("CARGO_MANIFEST_DIR");
         let default_runner_script =
             format!("{workspace_dir}/../../workers/temporal_runner/start_workflow.py");
+        let default_result_script =
+            format!("{workspace_dir}/../../workers/temporal_runner/get_workflow_result.py");
 
         Self {
             bind_host: "127.0.0.1".parse().expect("valid test host"),
@@ -61,6 +70,7 @@ impl AppConfig {
             temporal_namespace: "default".to_owned(),
             temporal_runner_python: "python3".to_owned(),
             temporal_runner_start_script: default_runner_script,
+            temporal_runner_result_script: default_result_script,
         }
     }
 
@@ -87,6 +97,15 @@ impl AppConfig {
             bail!(
                 "TEMPORAL_RUNNER_START_SCRIPT does not exist: {}",
                 self.temporal_runner_start_script
+            );
+        }
+        if self.temporal_runner_result_script.trim().is_empty() {
+            bail!("TEMPORAL_RUNNER_RESULT_SCRIPT must not be empty");
+        }
+        if !Path::new(&self.temporal_runner_result_script).exists() {
+            bail!(
+                "TEMPORAL_RUNNER_RESULT_SCRIPT does not exist: {}",
+                self.temporal_runner_result_script
             );
         }
         Ok(())

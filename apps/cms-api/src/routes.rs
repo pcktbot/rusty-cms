@@ -20,7 +20,7 @@ use cms_core::widget::{
 use cms_db::{
     models::{
         AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow,
-        MigrationPageRow, OutboxEventRow, SiteRow, WorkflowRequestRow,
+        MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow, WorkflowRequestRow,
     },
     repositories::PgRepository,
 };
@@ -110,6 +110,13 @@ struct TemporalStartResult {
     namespace: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct TemporalWorkflowResult {
+    workflow_id: String,
+    namespace: String,
+    result: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportLocalWidgetSourceRequest {
     pub path: String,
@@ -191,6 +198,15 @@ pub struct MigrationPageDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationPageArtifactDetail {
+    pub page_id: Uuid,
+    pub source_url: String,
+    pub http_status: Option<u16>,
+    pub final_url: Option<String>,
+    pub artifact: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationJobRecord {
     pub id: Uuid,
     pub site_id: Uuid,
@@ -248,6 +264,16 @@ pub struct MigrationApprovalReceipt {
     pub migration_id: Uuid,
     pub status: MigrationStatus,
     pub approved_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationSyncReceipt {
+    pub synced: bool,
+    pub migration_id: Uuid,
+    pub workflow_id: String,
+    pub status: MigrationStatus,
+    pub page_count: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -337,6 +363,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/migrations/{migration_id}/pages/{page_id}",
             get(migration_page_detail),
+        )
+        .route(
+            "/api/migrations/{migration_id}/pages/{page_id}/artifact",
+            get(migration_page_artifact_detail),
+        )
+        .route(
+            "/api/migrations/{migration_id}/sync-discovery",
+            post(sync_migration_discovery),
         )
         .route(
             "/api/migrations/{migration_id}/import-draft",
@@ -691,6 +725,93 @@ async fn migration_page_detail(
     Ok(Json(page))
 }
 
+async fn migration_page_artifact_detail(
+    Path((migration_id, page_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<MigrationPageArtifactDetail>, StatusCode> {
+    let repository = state
+        .repository
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if !record.pages.iter().any(|page| page.id == page_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let row = repository
+        .migration_page_artifact(page_id)
+        .await
+        .map_err(internal_db_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    migration_page_artifact_detail_from_row(row)
+        .map(Json)
+        .map_err(internal_mapping_error)
+}
+
+async fn sync_migration_discovery(
+    Path(migration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<MigrationSyncReceipt>, (StatusCode, Json<serde_json::Value>)> {
+    let repository = state.repository.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "migration discovery sync requires a configured database"
+        })),
+    ))?;
+    let record = load_migration_record(&state, migration_id)
+        .await
+        .map_err(json_db_error)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("migration {migration_id} was not found")
+            })),
+        ))?;
+
+    let workflow = load_temporal_workflow_result(&state.config, &record.workflow_id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+        })?;
+
+    let synced_record = persist_migration_workflow_result(repository, &record, &workflow.result)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+        })?;
+
+    let synced_record = load_migration_record(&state, synced_record.id)
+        .await
+        .map_err(json_db_error)?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "synced migration record could not be reloaded"
+            })),
+        ))?;
+
+    Ok(Json(MigrationSyncReceipt {
+        synced: true,
+        migration_id: synced_record.id,
+        workflow_id: synced_record.workflow_id,
+        status: synced_record.status,
+        page_count: synced_record.pages.len(),
+        warnings: synced_record.warnings,
+    }))
+}
+
 async fn approve_migration(
     Path(migration_id): Path<Uuid>,
     State(state): State<AppState>,
@@ -797,7 +918,11 @@ async fn import_migration_to_draft(
 
     let mut first_preview_url = None;
     for page in &record.pages {
-        let imported_page = imported_page_draft_from_migration_page(&record, page);
+        let artifact = repository
+            .migration_page_artifact(page.id)
+            .await
+            .map_err(json_db_error)?;
+        let imported_page = imported_page_draft_from_migration_page(&record, page, artifact);
         let change_row = DraftChangeRow {
             id: Uuid::new_v4(),
             change_set_id,
@@ -1540,6 +1665,7 @@ async fn migration_console() -> Html<String> {
             <h2>Review</h2>
             <div class="actions" style="margin: 12px 0 14px;">
               <button type="button" class="secondary" id="load-latest">Load latest job</button>
+              <button type="button" class="secondary" id="sync-discovery">Sync discovery</button>
               <button type="button" id="approve-job">Approve job</button>
               <button type="button" class="secondary" id="import-draft">Import draft</button>
             </div>
@@ -1678,6 +1804,25 @@ async fn migration_console() -> Html<String> {
         }
         try {
           const result = await fetchJson(`/api/migrations/${latestMigrationId}/approve`, {
+            method: "POST"
+          });
+          setLog(result);
+          await loadMigration(latestMigrationId);
+        } catch (error) {
+          setStatus("error");
+          setLog(String(error));
+        }
+      });
+
+      document.getElementById("sync-discovery").addEventListener("click", async () => {
+        if (!latestMigrationId) {
+          setStatus("idle");
+          setLog("No migration selected.");
+          return;
+        }
+        try {
+          setStatus("syncing discovery");
+          const result = await fetchJson(`/api/migrations/${latestMigrationId}/sync-discovery`, {
             method: "POST"
           });
           setLog(result);
@@ -2112,16 +2257,57 @@ async fn resolve_or_create_migration_branch(
 fn imported_page_draft_from_migration_page(
     record: &MigrationJobRecord,
     page: &MigrationPageDetail,
+    artifact_row: Option<MigrationPageArtifactRow>,
 ) -> ImportedPageDraft {
     let slug = slug_from_path(&page.path);
+    let artifact = artifact_row
+        .map(|row| row.artifact.0)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let seo = artifact
+        .get("seo")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let schema_types = artifact
+        .get("schema_types")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let layout = artifact
+        .get("layout")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "regions": [], "counts": {} }));
+    let text_blocks = artifact
+        .get("text_blocks")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let html_excerpt = artifact
+        .get("html_excerpt")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    let document_candidate = artifact
+        .get("document_candidate")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "regions": { "main": [] } }));
+
     let summary = if page.widget_matches.is_empty() {
         format!(
-            "Imported discovery shell for {} with {} unknown regions.",
+            "Imported discovery summary for {} with {} unknown regions.",
             page.path, page.unknown_regions
         )
     } else {
         format!(
-            "Imported discovery shell for {} with widget matches: {}.",
+            "Imported discovery summary for {} with widget matches: {}.",
             page.path,
             page.widget_matches.join(", ")
         )
@@ -2138,6 +2324,12 @@ fn imported_page_draft_from_migration_page(
         warnings: page.warnings.clone(),
         extraction_notes: page.extraction_notes.clone(),
         unknown_regions: page.unknown_regions,
+        seo,
+        schema_types,
+        layout,
+        text_blocks,
+        html_excerpt,
+        document_candidate,
     }
 }
 
@@ -2302,6 +2494,194 @@ fn migration_page_detail_from_row(row: MigrationPageRow) -> MigrationPageDetail 
         warnings: row.warnings.0,
         extraction_notes: row.extraction_notes.0,
     }
+}
+
+fn migration_page_artifact_detail_from_row(
+    row: MigrationPageArtifactRow,
+) -> Result<MigrationPageArtifactDetail, String> {
+    Ok(MigrationPageArtifactDetail {
+        page_id: row.migration_page_id,
+        source_url: row.source_url,
+        http_status: row.http_status.map(|value| value.max(0) as u16),
+        final_url: row.final_url,
+        artifact: row.artifact.0,
+    })
+}
+
+async fn persist_migration_workflow_result(
+    repository: &PgRepository,
+    record: &MigrationJobRecord,
+    workflow_result: &serde_json::Value,
+) -> Result<MigrationJobRecord, String> {
+    let migration = workflow_result
+        .get("migration")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("workflow result is missing a migration payload")?;
+    let status = migration
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("migration result is missing status")?;
+    let warnings = migration
+        .get("warnings")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let pages = migration
+        .get("pages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("migration result is missing pages")?;
+
+    repository
+        .update_migration_job_review_data(
+            record.id,
+            migration_status_name(&parse_migration_status(status)?),
+            &sqlx::types::Json(warnings.clone()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    repository
+        .delete_migration_pages(record.id)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut page_details = Vec::new();
+    for page in pages {
+        let page_id = Uuid::new_v4();
+        let page_detail = migration_page_detail_from_result(page_id, page)?;
+        let page_row = migration_page_row_from_detail(record.id, &page_detail);
+        repository
+            .insert_migration_page(&page_row)
+            .await
+            .map_err(|error| error.to_string())?;
+        let artifact_row = migration_page_artifact_row_from_result(page_id, page)?;
+        repository
+            .upsert_migration_page_artifact(&artifact_row)
+            .await
+            .map_err(|error| error.to_string())?;
+        page_details.push(page_detail);
+    }
+
+    Ok(MigrationJobRecord {
+        id: record.id,
+        site_id: record.site_id,
+        workflow_request_id: record.workflow_request_id,
+        workflow_id: record.workflow_id.clone(),
+        branch_name: record.branch_name.clone(),
+        homepage_url: record.homepage_url.clone(),
+        client_id: record.client_id,
+        location_id: record.location_id,
+        legacy_api_profile: record.legacy_api_profile.clone(),
+        status: parse_migration_status(status)?,
+        options: record.options.clone(),
+        pages: page_details,
+        warnings,
+        created_at: record.created_at,
+        approved_at: record.approved_at,
+    })
+}
+
+fn migration_page_detail_from_result(
+    page_id: Uuid,
+    page: &serde_json::Value,
+) -> Result<MigrationPageDetail, String> {
+    let object = page
+        .as_object()
+        .ok_or("migration page result must be an object")?;
+    Ok(MigrationPageDetail {
+        id: page_id,
+        path: object
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("/")
+            .to_owned(),
+        title_guess: object
+            .get("title_guess")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Homepage")
+            .to_owned(),
+        widget_matches: object
+            .get("widget_matches")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        unknown_regions: object
+            .get("unknown_regions")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32,
+        confidence: object
+            .get("confidence")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32,
+        warnings: object
+            .get("warnings")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        extraction_notes: object
+            .get("extraction_notes")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+fn migration_page_artifact_row_from_result(
+    page_id: Uuid,
+    page: &serde_json::Value,
+) -> Result<MigrationPageArtifactRow, String> {
+    let object = page
+        .as_object()
+        .ok_or("migration page result must be an object")?;
+    let now = OffsetDateTime::now_utc();
+    Ok(MigrationPageArtifactRow {
+        id: Uuid::new_v4(),
+        migration_page_id: page_id,
+        source_url: object
+            .get("source_url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        http_status: object
+            .get("http_status")
+            .and_then(serde_json::Value::as_i64)
+            .map(|value| value as i32),
+        final_url: object
+            .get("final_url")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        artifact: sqlx::types::Json(serde_json::json!({
+            "seo": object.get("seo").cloned().unwrap_or_else(|| serde_json::json!({})),
+            "schema_types": object.get("schema_types").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "layout": object.get("layout").cloned().unwrap_or_else(|| serde_json::json!({ "regions": [], "counts": {} })),
+            "text_blocks": object.get("text_blocks").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "html_excerpt": object.get("html_excerpt").cloned().unwrap_or(serde_json::Value::Null),
+            "document_candidate": object.get("document_candidate").cloned().unwrap_or_else(|| serde_json::json!({ "regions": { "main": [] } })),
+            "internal_links": object.get("internal_links").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "asset_urls": object.get("asset_urls").cloned().unwrap_or_else(|| serde_json::json!([])),
+        })),
+        created_at: now,
+        updated_at: now,
+    })
 }
 
 fn draft_change_set_summary_from_row(
@@ -2831,6 +3211,46 @@ async fn start_temporal_workflow(
         .map_err(|error| format!("failed to decode temporal start output: {error}"))
 }
 
+async fn load_temporal_workflow_result(
+    config: &AppConfig,
+    workflow_id: &str,
+) -> Result<TemporalWorkflowResult, String> {
+    let mut child = Command::new(&config.temporal_runner_python);
+    child
+        .arg(&config.temporal_runner_result_script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = child
+        .spawn()
+        .map_err(|error| format!("failed to spawn temporal result script: {error}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let payload = serde_json::json!({
+            "workflow_id": workflow_id,
+            "timeout_seconds": 2.0
+        });
+        stdin
+            .write_all(payload.to_string().as_bytes())
+            .await
+            .map_err(|error| format!("failed to write workflow id to temporal script: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|error| format!("failed waiting for temporal result script: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("temporal result script failed: {}", stderr.trim()));
+    }
+
+    serde_json::from_slice::<TemporalWorkflowResult>(&output.stdout)
+        .map_err(|error| format!("failed to decode temporal result output: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3080,9 +3500,10 @@ mod tests {
             extraction_notes: vec![],
         };
 
-        let imported = imported_page_draft_from_migration_page(&record, &page);
+        let imported = imported_page_draft_from_migration_page(&record, &page, None);
         assert_eq!(imported.slug, "floor-plans");
         assert!(imported.summary.contains("floor-plans-plus"));
+        assert!(imported.schema_types.is_empty());
     }
 
     #[test]

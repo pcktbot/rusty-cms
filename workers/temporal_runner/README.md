@@ -40,11 +40,13 @@ Point the Rust API at the virtualenv interpreter:
 
 ```bash
 export TEMPORAL_RUNNER_PYTHON="$PWD/workers/temporal_runner/.venv/bin/python"
+export TEMPORAL_RUNNER_RESULT_SCRIPT="$PWD/workers/temporal_runner/get_workflow_result.py"
 cargo run -p cms-api
 ```
 
 Then `POST /api/sites/:site_id/workflow-requests/trigger` with a valid workflow
-request payload.
+request payload. Migration discovery results can be pulled back into Postgres via
+`POST /api/migrations/:migration_id/sync-discovery`.
 
 ## AI workflow runtime
 

@@ -1,6 +1,7 @@
 use crate::models::{
-    AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow, MigrationPageRow,
-    OutboxEventRow, SiteRow, WidgetDefinitionRow, WidgetDefinitionVersionRow, WorkflowRequestRow,
+    AccountRow, BranchRow, DraftChangeRow, DraftChangeSetRow, MigrationJobRow,
+    MigrationPageArtifactRow, MigrationPageRow, OutboxEventRow, SiteRow, WidgetDefinitionRow,
+    WidgetDefinitionVersionRow, WorkflowRequestRow,
 };
 use sqlx::{PgPool, query_as, query_scalar};
 use uuid::Uuid;
@@ -386,6 +387,45 @@ impl PgRepository {
         .await
     }
 
+    pub async fn upsert_migration_page_artifact(
+        &self,
+        row: &MigrationPageArtifactRow,
+    ) -> Result<MigrationPageArtifactRow, sqlx::Error> {
+        query_as::<_, MigrationPageArtifactRow>(
+            r#"
+            INSERT INTO migration_page_artifacts (
+                id,
+                migration_page_id,
+                source_url,
+                http_status,
+                final_url,
+                artifact,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (migration_page_id) DO UPDATE
+            SET source_url = EXCLUDED.source_url,
+                http_status = EXCLUDED.http_status,
+                final_url = EXCLUDED.final_url,
+                artifact = EXCLUDED.artifact,
+                updated_at = EXCLUDED.updated_at
+            RETURNING id, migration_page_id, source_url, http_status, final_url, artifact,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(row.id)
+        .bind(row.migration_page_id)
+        .bind(&row.source_url)
+        .bind(row.http_status)
+        .bind(&row.final_url)
+        .bind(&row.artifact)
+        .bind(row.created_at)
+        .bind(row.updated_at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     pub async fn migration_job(
         &self,
         migration_job_id: Uuid,
@@ -443,6 +483,38 @@ impl PgRepository {
         .await
     }
 
+    pub async fn migration_page_artifact(
+        &self,
+        migration_page_id: Uuid,
+    ) -> Result<Option<MigrationPageArtifactRow>, sqlx::Error> {
+        query_as::<_, MigrationPageArtifactRow>(
+            r#"
+            SELECT id, migration_page_id, source_url, http_status, final_url, artifact,
+                   created_at, updated_at
+            FROM migration_page_artifacts
+            WHERE migration_page_id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(migration_page_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn delete_migration_pages(&self, migration_job_id: Uuid) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM migration_pages
+            WHERE migration_job_id = $1
+            "#,
+        )
+        .bind(migration_job_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn approve_migration_job(
         &self,
         migration_job_id: Uuid,
@@ -482,6 +554,30 @@ impl PgRepository {
         )
         .bind(migration_job_id)
         .bind(status)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn update_migration_job_review_data(
+        &self,
+        migration_job_id: Uuid,
+        status: &str,
+        warnings: &sqlx::types::Json<Vec<String>>,
+    ) -> Result<Option<MigrationJobRow>, sqlx::Error> {
+        query_as::<_, MigrationJobRow>(
+            r#"
+            UPDATE migration_jobs
+            SET status = $2,
+                warnings = $3
+            WHERE id = $1
+            RETURNING id, site_id, workflow_request_id, workflow_id, branch_name, homepage_url,
+                      client_id, location_id, legacy_api_profile, status, options, warnings,
+                      created_at, approved_at
+            "#,
+        )
+        .bind(migration_job_id)
+        .bind(status)
+        .bind(warnings)
         .fetch_optional(&self.pool)
         .await
     }

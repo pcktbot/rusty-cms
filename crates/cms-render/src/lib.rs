@@ -2,6 +2,7 @@ use cms_core::{
     draft::{DraftPreviewRef, ImportedPageDraft},
     site::SiteSnapshotRef,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Default, Clone)]
@@ -178,6 +179,64 @@ impl RenderEngine {
                 .join("")
         };
 
+        let schema_types = if page.schema_types.is_empty() {
+            "<li>no schema types discovered</li>".to_owned()
+        } else {
+            page.schema_types
+                .iter()
+                .map(|item| format!("<li>{}</li>", escape_html(item)))
+                .collect::<Vec<_>>()
+                .join("")
+        };
+
+        let text_blocks = if page.text_blocks.is_empty() {
+            "<li>no text excerpts captured</li>".to_owned()
+        } else {
+            page.text_blocks
+                .iter()
+                .map(|item| format!("<li>{}</li>", escape_html(item)))
+                .collect::<Vec<_>>()
+                .join("")
+        };
+
+        let seo_bits = render_seo_bits(&page.seo);
+        let layout_regions = page
+            .layout
+            .get("regions")
+            .and_then(Value::as_array)
+            .map(|regions| {
+                if regions.is_empty() {
+                    "<li>no structural regions detected</li>".to_owned()
+                } else {
+                    regions
+                        .iter()
+                        .take(12)
+                        .map(|region| {
+                            let kind = region
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown");
+                            let selector = region
+                                .get("selector_hint")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            format!(
+                                "<li>{} <span class=\"muted\">{}</span></li>",
+                                escape_html(kind),
+                                escape_html(selector)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                }
+            })
+            .unwrap_or_else(|| "<li>no structural regions detected</li>".to_owned());
+        let html_excerpt = page
+            .html_excerpt
+            .as_ref()
+            .map(|html| escape_html(html))
+            .unwrap_or_else(|| "no HTML excerpt captured".to_owned());
+
         Ok(format!(
             r#"<!doctype html>
 <html lang="en">
@@ -222,7 +281,7 @@ impl RenderEngine {
         letter-spacing: 0.08em;
         color: var(--accent);
       }}
-      h1, h2, p, ul {{
+      h1, h2, p, ul, pre {{
         margin: 0;
       }}
       h1 {{
@@ -244,12 +303,25 @@ impl RenderEngine {
         padding-left: 18px;
         line-height: 1.5;
       }}
+      pre {{
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        font: inherit;
+        line-height: 1.5;
+      }}
       .pill {{
         display: inline-block;
         padding: 4px 8px;
         border: 2px solid var(--line);
         margin: 6px 8px 0 0;
         background: #fff4e8;
+      }}
+      .wide {{
+        margin-top: 14px;
+      }}
+      .muted {{
+        color: var(--muted);
       }}
     </style>
   </head>
@@ -282,6 +354,26 @@ impl RenderEngine {
           <h2>Unknown regions</h2>
           <p>{unknown_regions}</p>
         </article>
+        <article class="panel">
+          <h2>SEO</h2>
+          <ul>{seo_bits}</ul>
+        </article>
+        <article class="panel">
+          <h2>Schema types</h2>
+          <ul>{schema_types}</ul>
+        </article>
+        <article class="panel">
+          <h2>Layout regions</h2>
+          <ul>{layout_regions}</ul>
+        </article>
+        <article class="panel">
+          <h2>Text excerpts</h2>
+          <ul>{text_blocks}</ul>
+        </article>
+      </section>
+      <section class="panel wide">
+        <h2>HTML excerpt</h2>
+        <pre>{html_excerpt}</pre>
       </section>
     </main>
   </body>
@@ -302,7 +394,40 @@ impl RenderEngine {
             warnings = warnings,
             notes = notes,
             unknown_regions = page.unknown_regions,
+            seo_bits = seo_bits,
+            schema_types = schema_types,
+            layout_regions = layout_regions,
+            text_blocks = text_blocks,
+            html_excerpt = html_excerpt,
         ))
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn render_seo_bits(seo: &Value) -> String {
+    let mut bits = Vec::new();
+    for field in ["title", "meta_description", "h1", "canonical_url", "robots"] {
+        if let Some(value) = seo.get(field).and_then(Value::as_str) {
+            if !value.is_empty() {
+                bits.push(format!(
+                    "<li>{}: {}</li>",
+                    escape_html(field),
+                    escape_html(value)
+                ));
+            }
+        }
+    }
+
+    if bits.is_empty() {
+        "<li>no SEO fields captured</li>".to_owned()
+    } else {
+        bits.join("")
     }
 }
 
@@ -348,6 +473,19 @@ mod tests {
             warnings: vec![],
             extraction_notes: vec![],
             unknown_regions: 3,
+            seo: serde_json::json!({
+                "title": "Hearth",
+                "meta_description": "Apartments in Shelburne."
+            }),
+            schema_types: vec!["WebPage".to_owned()],
+            layout: serde_json::json!({
+                "regions": [{ "kind": "hero", "selector_hint": "section.hero-banner" }]
+            }),
+            text_blocks: vec!["Warm residences near the lake.".to_owned()],
+            html_excerpt: Some("<main><section>Warm residences</section></main>".to_owned()),
+            document_candidate: serde_json::json!({
+                "regions": { "main": [] }
+            }),
         };
 
         let html = renderer
@@ -356,5 +494,6 @@ mod tests {
         assert!(html.contains("Imported Draft Preview"));
         assert!(html.contains("change_set: cccccccc-cccc-cccc-cccc-cccccccccccc"));
         assert!(html.contains("hero-banner"));
+        assert!(html.contains("Schema types"));
     }
 }

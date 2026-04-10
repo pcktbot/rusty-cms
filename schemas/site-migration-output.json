@@ -73,14 +73,39 @@
             "type": "object",
             "required": [
               "path",
+              "source_url",
+              "final_url",
+              "http_status",
               "title_guess",
               "widget_matches",
               "unknown_regions",
-              "confidence"
+              "confidence",
+              "warnings",
+              "extraction_notes",
+              "seo",
+              "schema_types",
+              "layout",
+              "text_blocks",
+              "html_excerpt",
+              "document_candidate",
+              "internal_links",
+              "asset_urls"
             ],
             "properties": {
               "path": {
                 "type": "string"
+              },
+              "source_url": {
+                "type": "string"
+              },
+              "final_url": {
+                "type": "string"
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "title_guess": {
                 "type": "string"
@@ -96,6 +121,54 @@
               },
               "confidence": {
                 "type": "number"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extraction_notes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "seo": {
+                "type": "object"
+              },
+              "schema_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "layout": {
+                "type": "object"
+              },
+              "text_blocks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "html_excerpt": {
+                "type": "string"
+              },
+              "document_candidate": {
+                "type": "object"
+              },
+              "internal_links": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "asset_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "additionalProperties": false

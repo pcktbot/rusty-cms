@@ -17,8 +17,10 @@ from rusty_cms_temporal.ai.contracts import (
 from rusty_cms_temporal.ai.orchestrator import execute_ai_workflow
 from rusty_cms_temporal.ai.retrieval import build_retriever
 from rusty_cms_temporal.migrations import (
+    FetchResult,
     build_ssl_context,
-    discover_pages,
+    crawl_page,
+    discover_paths,
     execute_site_migration,
 )
 
@@ -111,10 +113,13 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(request.retrieval.documents), 2)
 
     async def test_site_migration_stub_returns_review_ready_shape(self):
-        html = """
+        homepage_html = """
         <html>
           <head>
             <title>Example Property</title>
+            <script type="application/ld+json">
+              {"@context":"https://schema.org","@type":"WebPage"}
+            </script>
           </head>
           <body>
             <div class="hero-banner">Hero</div>
@@ -126,7 +131,38 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
           </body>
         </html>
         """
-        with patch("rusty_cms_temporal.migrations.fetch_html", return_value=html):
+        inner_html = """
+        <html>
+          <head><title>Floor Plans</title></head>
+          <body>
+            <main>
+              <section class="row hero-banner">
+                <h1>Choose Your Layout</h1>
+                <p>Browse studio, one-, and two-bedroom homes.</p>
+              </section>
+            </main>
+          </body>
+        </html>
+        """
+
+        def fake_fetch(url: str, timeout_seconds: float = 10.0) -> FetchResult:
+            if url.endswith("/floorplans"):
+                return FetchResult(
+                    source_url=url,
+                    final_url=url,
+                    http_status=200,
+                    content_type="text/html",
+                    html=inner_html,
+                )
+            return FetchResult(
+                source_url=url,
+                final_url=url,
+                http_status=200,
+                content_type="text/html",
+                html=homepage_html,
+            )
+
+        with patch("rusty_cms_temporal.migrations.fetch_html", side_effect=fake_fetch):
             result = await execute_site_migration(
                 {
                     "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
@@ -136,7 +172,7 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "requested_runtime": "Python",
                     "temporal_queue": "cms-migrations",
                     "input_payload": {
-                        "homepage_url": "https://example.com/floorplans",
+                        "homepage_url": "https://example.com/",
                         "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
                         "location_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
                         "options": {
@@ -149,13 +185,16 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["accepted"])
         self.assertEqual(result["migration"]["status"], "review_ready")
-        self.assertEqual(result["migration"]["pages"][0]["path"], "/floorplans")
+        self.assertEqual(result["migration"]["pages"][0]["path"], "/")
         self.assertIn(
             "hero-banner",
             result["migration"]["pages"][0]["widget_matches"],
         )
+        self.assertEqual(result["migration"]["pages"][1]["path"], "/floorplans")
+        self.assertIn("WebPage", result["migration"]["pages"][0]["schema_types"])
+        self.assertTrue(result["migration"]["pages"][1]["layout"]["regions"])
 
-    def test_discover_pages_extracts_internal_links_and_widget_signals(self):
+    def test_discovery_extracts_internal_links_and_widget_signals(self):
         html = """
         <html>
           <head>
@@ -169,11 +208,48 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         </html>
         """
 
-        pages = discover_pages("https://example.com/", html, detect_widgets=True)
+        paths = discover_paths("https://example.com/", html)
 
-        self.assertEqual(pages[0].title_guess, "Hearth Apartments")
-        self.assertIn("floor-plans-plus", pages[0].widget_matches)
-        self.assertEqual(pages[1].path, "/floor-plans")
+        self.assertEqual(paths[0], "/")
+        self.assertEqual(paths[1], "/floor-plans")
+
+    def test_crawl_page_extracts_schema_and_layout_summary(self):
+        html = """
+        <html>
+          <head>
+            <title>Hearth Apartments</title>
+            <meta name="description" content="Live well in Shelburne." />
+            <script type="application/ld+json">
+              {"@context":"https://schema.org","@type":["WebPage","FAQPage"]}
+            </script>
+          </head>
+          <body>
+            <main>
+              <section class="hero-banner row">
+                <h1>Find Home</h1>
+                <p>Warm residences near the lake.</p>
+              </section>
+              <aside class="sidebar">Leasing info</aside>
+            </main>
+          </body>
+        </html>
+        """
+        with patch(
+            "rusty_cms_temporal.migrations.fetch_html",
+            return_value=FetchResult(
+                source_url="https://example.com/",
+                final_url="https://example.com/",
+                http_status=200,
+                content_type="text/html",
+                html=html,
+            ),
+        ):
+            page = crawl_page("/", "https://example.com/", detect_widgets=True)
+
+        self.assertEqual(page.seo["meta_description"], "Live well in Shelburne.")
+        self.assertIn("FAQPage", page.schema_types)
+        self.assertTrue(page.layout["regions"])
+        self.assertTrue(page.document_candidate["regions"]["main"])
 
     def test_build_ssl_context_can_disable_verification(self):
         with patch.dict(

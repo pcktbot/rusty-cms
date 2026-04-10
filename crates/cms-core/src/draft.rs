@@ -90,6 +90,12 @@ pub struct ImportedPageDraft {
     pub warnings: Vec<String>,
     pub extraction_notes: Vec<String>,
     pub unknown_regions: u32,
+    pub seo: Value,
+    pub schema_types: Vec<String>,
+    pub layout: Value,
+    pub text_blocks: Vec<String>,
+    pub html_excerpt: Option<String>,
+    pub document_candidate: Value,
 }
 
 #[cfg(test)]
