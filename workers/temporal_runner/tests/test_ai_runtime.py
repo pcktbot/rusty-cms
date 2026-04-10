@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ssl
 import sys
 import unittest
 from pathlib import Path
@@ -15,7 +16,11 @@ from rusty_cms_temporal.ai.contracts import (
 )
 from rusty_cms_temporal.ai.orchestrator import execute_ai_workflow
 from rusty_cms_temporal.ai.retrieval import build_retriever
-from rusty_cms_temporal.migrations import discover_pages, execute_site_migration
+from rusty_cms_temporal.migrations import (
+    build_ssl_context,
+    discover_pages,
+    execute_site_migration,
+)
 
 
 def sample_workflow_request() -> dict:
@@ -169,6 +174,17 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages[0].title_guess, "Hearth Apartments")
         self.assertIn("floor-plans-plus", pages[0].widget_matches)
         self.assertEqual(pages[1].path, "/floor-plans")
+
+    def test_build_ssl_context_can_disable_verification(self):
+        with patch.dict(
+            "os.environ",
+            {"CMS_MIGRATION_ALLOW_INSECURE_TLS": "true"},
+            clear=False,
+        ):
+            context = build_ssl_context()
+
+        self.assertEqual(context.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(context.check_hostname)
 
 
 if __name__ == "__main__":

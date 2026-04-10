@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ssl
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Iterable
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
+
+from rusty_cms_temporal.env import env_flag, optional_env
 
 
 USER_AGENT = "rusty-cms-migrator/0.1"
@@ -119,9 +122,22 @@ def normalize_internal_link(homepage_url: str, href: str) -> str | None:
     return parsed.path or "/"
 
 
+def build_ssl_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    ca_bundle = optional_env("CMS_MIGRATION_CA_BUNDLE")
+    if ca_bundle:
+        context.load_verify_locations(cafile=ca_bundle)
+
+    if env_flag("CMS_MIGRATION_ALLOW_INSECURE_TLS", default=False):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    return context
+
+
 def fetch_html(url: str, timeout_seconds: float = 10.0) -> str:
     request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout_seconds) as response:
+    with urlopen(request, timeout=timeout_seconds, context=build_ssl_context()) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
 
@@ -209,6 +225,12 @@ async def execute_site_migration(request: dict) -> dict:
     warnings.append(
         "Discovery is implemented for the homepage and same-host links, but classifier, importer, and validation are still pending."
     )
+    if optional_env("CMS_MIGRATION_CA_BUNDLE"):
+        warnings.append("Migration crawler is using a custom CA bundle.")
+    if env_flag("CMS_MIGRATION_ALLOW_INSECURE_TLS", default=False):
+        warnings.append(
+            "Migration crawler is running with insecure TLS verification disabled."
+        )
     if options.get("use_legacy_api_enrichment", False):
         warnings.append(
             "Legacy API enrichment is enabled in the request contract but not implemented yet."

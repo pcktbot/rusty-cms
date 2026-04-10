@@ -33,6 +33,18 @@ TEMPORAL_RUNNER_PYTHON=/Users/david.miller/Documents/current/test-cms-rewrite/wo
 TEMPORAL_RUNNER_START_SCRIPT=/Users/david.miller/Documents/current/test-cms-rewrite/workers/temporal_runner/start_workflow.py
 ```
 
+Migration crawler TLS options:
+
+```env
+CMS_MIGRATION_CA_BUNDLE=/absolute/path/to/corporate-ca.pem
+CMS_MIGRATION_ALLOW_INSECURE_TLS=false
+```
+
+Notes:
+
+- Prefer `CMS_MIGRATION_CA_BUNDLE` if your VPN or proxy injects a corporate cert.
+- Only use `CMS_MIGRATION_ALLOW_INSECURE_TLS=true` as a fallback for local development.
+
 ## Database
 
 Run migrations:

@@ -66,6 +66,13 @@ Useful environment variables:
 - `LANGSMITH_TRACING=true`
 - `LANGSMITH_API_KEY=...`
 - `LANGSMITH_PROJECT=rusty-cms`
+- `CMS_MIGRATION_CA_BUNDLE=/absolute/path/to/corporate-ca.pem`
+- `CMS_MIGRATION_ALLOW_INSECURE_TLS=false`
+
+For migration crawling behind a corporate VPN or proxy:
+
+- prefer `CMS_MIGRATION_CA_BUNDLE` so HTTPS verification still works with your corporate root CA
+- use `CMS_MIGRATION_ALLOW_INSECURE_TLS=true` only as a local fallback when you cannot install the CA bundle yet
 
 Current retrieval/eval posture:
 
