@@ -42,6 +42,7 @@ Status legend:
 - `implemented` publish state machine domain model
 - `scaffolded` publish target model and artifact tables
 - `implemented` imported-draft preview route for migration-generated change sets
+- `scaffolded` imported-draft preview rendering with SEO, schema, layout, image, and media-text artifact display
 - `planned` real snapshot renderer
 - `planned` full-site static build pipeline
 - `planned` atomic release promotion on disk
@@ -121,6 +122,51 @@ Planned selective publish strategy:
 - publish creates a candidate snapshot from an explicit set of selected changes
 - release promotion stays atomic because only the candidate snapshot is built and promoted
 
+## Site-building model
+
+Reference: [`docs/site-building-model.md`](/Users/david.miller/Documents/current/test-cms-rewrite/docs/site-building-model.md)
+
+- `implemented` high-level slot-based page and template direction in architecture and migration preview flows
+- `scaffolded` provisional document candidates in migration artifacts
+- `planned` stable page-document schema with template targets
+- `planned` primitive catalog for content, layout, and viewport-attached blocks
+- `planned` block instance schema with content, layout, visibility, and metadata payloads
+- `planned` target compatibility and structural validation rules
+
+## Authoring and editing
+
+- `implemented` draft change-set and draft-change persistence foundation
+- `scaffolded` widget-command route contract for future mutations
+- `planned` block-level typed mutation commands
+- `planned` inline editing for text and lightweight content fields
+- `planned` inspector editing for layout, visibility, and settings
+- `planned` structural actions for move, duplicate, convert, and preset save
+- `planned` mobile-first preview defaults and responsive-safe layout controls
+
+## Brand system and fragment SSR
+
+- `planned` brand token schema
+- `planned` semantic style presets for headings, CTAs, cards, forms, nav, and footers
+- `planned` shared fragment library for reusable branded sections
+- `planned` fragment SSR endpoints for brand-guide authoring
+- `planned` AI-assisted fragment variation loop against SSR render output
+
+## Platform capabilities
+
+- `planned` platform capability registry for analytics, phone swapping, forms runtime, data bridges, and consent
+- `planned` environment-aware injection rules for preview, build, and published outputs
+- `planned` capability configuration schemas and dependency ordering
+
+## Tasks and evaluations
+
+- `implemented` provider-neutral AI workflow activity orchestration
+- `implemented` LangSmith gating flags and evaluation metadata seams
+- `planned` typed authoring task schemas
+- `planned` freeform task schemas with scope and constraints
+- `planned` task outputs that resolve into typed proposed mutations
+- `planned` evaluation-run persistence for pagespeed, SEO, WCAG, and content QA
+- `planned` evaluation findings and score history tied to branch, change set, and snapshot state
+
 ## UI
 
 - `implemented` temporary server-rendered preview shell
@@ -128,11 +174,13 @@ Planned selective publish strategy:
 - `planned` Bun + SvelteKit management app
 - `planned` migration review interface
 - `planned` page tree and widget editing shell
+- `planned` brand-guide builder with fragment previews
+- `planned` in-page editing affordances over preview renders
 
 ## Immediate next steps
 
-1. Replace manual migration discovery sync with automatic workflow result ingestion.
-2. Promote document candidates into stable page-document schemas instead of loosely typed JSON.
-3. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
+1. Promote document candidates into a stable page-document schema with template targets and primitive blocks.
+2. Add widget signature metadata to the registry model and classify known legacy widgets during migration.
+3. Replace widget-command stubs with real draft block mutations on top of selected base snapshots.
 4. Add preview cache keys and Redis-backed invalidation for draft page renders.
-5. Replace widget-command stubs with real draft change mutations on top of selected base snapshots.
+5. Replace manual migration discovery sync with automatic workflow result ingestion.
