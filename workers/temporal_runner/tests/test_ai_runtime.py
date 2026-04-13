@@ -21,6 +21,7 @@ from rusty_cms_temporal.migrations import (
     build_ssl_context,
     crawl_page,
     discover_paths,
+    execute_page_document_extraction,
     extract_page_document_candidate,
     execute_site_migration,
 )
@@ -198,7 +199,7 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["migration"]["pages"][1]["images"])
         self.assertTrue(result["migration"]["pages"][1]["media_text_regions"])
 
-    async def test_site_migration_can_run_page_document_extraction_action(self):
+    async def test_page_document_extraction_returns_expected_shape(self):
         html = """
         <html>
           <head><title>Floor Plans</title></head>
@@ -226,7 +227,7 @@ class AiRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 html=html,
             ),
         ):
-            result = await execute_site_migration(
+            result = await execute_page_document_extraction(
                 {
                     "id": "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
                     "kind": "SiteMigration",

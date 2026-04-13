@@ -118,7 +118,7 @@ With Temporal running:
 4. Start `cargo run -p cms-api`.
 5. Open `/migration-console`.
 6. Create a migration.
-7. Click `Sync discovery` after the workflow finishes.
+7. Click `Sync workflow result` after the workflow finishes.
 8. Approve it if needed.
 9. Import it into a draft change set.
 

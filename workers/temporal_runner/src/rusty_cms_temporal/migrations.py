@@ -952,13 +952,10 @@ def humanize_path(path: str) -> str:
     return stripped.replace("-", " ").replace("_", " ").title()
 
 
-async def execute_site_migration(request: dict) -> dict:
+async def execute_site_discovery(request: dict) -> dict:
     payload = dict(request.get("input_payload") or {})
-    action = str(payload.get("action") or DISCOVER_SITE_ACTION)
     options = dict(payload.get("options") or {})
     homepage_url = str(payload.get("homepage_url") or "")
-    if action == EXTRACT_PAGE_DOCUMENTS_ACTION:
-        return await execute_page_document_extraction(request)
     detect_widgets = bool(options.get("detect_registered_widgets", False))
     warnings: list[str] = []
 
@@ -1121,5 +1118,42 @@ async def execute_page_document_extraction(request: dict) -> dict:
             "page_count_guess": len(extracted_pages),
             "pages": extracted_pages,
             "warnings": warnings,
+        },
+    }
+
+
+async def execute_site_migration(request: dict) -> dict:
+    discovery = await execute_site_discovery(request)
+    discovery_payload = discovery["migration"]
+
+    extraction_request = {
+        **request,
+        "input_payload": {
+            **dict(request.get("input_payload") or {}),
+            "action": EXTRACT_PAGE_DOCUMENTS_ACTION,
+            "pages": discovery_payload.get("pages", []),
+        },
+    }
+    extraction = await execute_page_document_extraction(extraction_request)
+    extraction_payload = extraction["migration"]
+
+    return {
+        "accepted": True,
+        "workflow_kind": request["kind"],
+        "site_id": request["site_id"],
+        "branch_name": request["branch_name"],
+        "requested_runtime": request["requested_runtime"],
+        "temporal_queue": request["temporal_queue"],
+        "migration": {
+            "status": extraction_payload["status"],
+            "homepage_url": discovery_payload.get("homepage_url"),
+            "client_id": discovery_payload.get("client_id"),
+            "location_id": discovery_payload.get("location_id"),
+            "page_count_guess": extraction_payload.get("page_count_guess", 0),
+            "pages": extraction_payload.get("pages", []),
+            "warnings": [
+                *discovery_payload.get("warnings", []),
+                *extraction_payload.get("warnings", []),
+            ],
         },
     }

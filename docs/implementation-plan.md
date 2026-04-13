@@ -54,7 +54,7 @@ Status legend:
 - `implemented` AI workflow runtime wrappers with provider abstraction, retrieval hooks, LangSmith flags, and Anthropic/Vertex adapter seams
 - `implemented` site migration workflow kind, queue, schemas, and worker activity
 - `implemented` crawl/discovery pass for homepage and discovered same-host pages
-- `implemented` separate page-document extraction action for migration workflows
+- `implemented` multi-step SiteMigration workflow timeline with separate discovery and extraction activities inside one workflow run
 - `implemented` first-pass SEO extraction, schema discovery, layout summaries, and document candidates in the migration worker
 - `implemented` ordered main-content extraction with wrapper suppression for deeper page-document candidates
 - `implemented` site migration review artifact generation with persisted page artifacts
@@ -83,10 +83,10 @@ Status legend:
 - `implemented` migration workflow admission and Temporal trigger path
 - `implemented` migration review records and page-level review endpoints
 - `implemented` homepage crawler and same-host route discovery
-- `implemented` explicit extraction trigger and sync routes for deeper page-document generation
 - `implemented` persisted migration page artifacts with SEO, schema, layout, text, and provisional document candidates
 - `implemented` migration-to-draft import route that creates draft change sets from persisted discovery artifacts
-- `scaffolded` DOM/template classifier with separate discovery and extraction stages
+- `implemented` single-workflow migration sync that now pulls both discovery and extraction results into the review record
+- `scaffolded` DOM/template classifier with distinct discovery and extraction stages inside one workflow
 - `planned` registered-widget signature detection
 - `planned` targeted legacy API enrichment
 - `scaffolded` draft snapshot importer via provisional page-shell changes and document candidates

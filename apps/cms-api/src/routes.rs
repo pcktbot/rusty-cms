@@ -278,22 +278,6 @@ pub struct MigrationSyncReceipt {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct WorkflowResultSyncRequest {
-    pub workflow_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MigrationExtractionTriggerReceipt {
-    pub admitted: bool,
-    pub migration_id: Uuid,
-    pub workflow_id: String,
-    pub run_id: Option<String>,
-    pub temporal_queue: String,
-    pub temporal_namespace: String,
-    pub temporal_ui_url: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportMigrationDraftReceipt {
     pub imported: bool,
@@ -390,16 +374,12 @@ pub fn build_router(state: AppState) -> Router {
             get(migration_page_artifact_detail),
         )
         .route(
+            "/api/migrations/{migration_id}/sync-workflow",
+            post(sync_migration_workflow),
+        )
+        .route(
             "/api/migrations/{migration_id}/sync-discovery",
-            post(sync_migration_discovery),
-        )
-        .route(
-            "/api/migrations/{migration_id}/extract-page-documents",
-            post(trigger_migration_page_extraction),
-        )
-        .route(
-            "/api/migrations/{migration_id}/sync-extraction",
-            post(sync_migration_page_extraction),
+            post(sync_migration_workflow),
         )
         .route(
             "/api/migrations/{migration_id}/import-draft",
@@ -816,7 +796,7 @@ async fn migration_page_artifact_detail(
         .map_err(internal_mapping_error)
 }
 
-async fn sync_migration_discovery(
+async fn sync_migration_workflow(
     Path(migration_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<MigrationSyncReceipt>, (StatusCode, Json<serde_json::Value>)> {
@@ -872,119 +852,6 @@ async fn sync_migration_discovery(
         synced: true,
         migration_id: synced_record.id,
         workflow_id: synced_record.workflow_id,
-        status: synced_record.status,
-        page_count: synced_record.pages.len(),
-        warnings: synced_record.warnings,
-    }))
-}
-
-async fn trigger_migration_page_extraction(
-    Path(migration_id): Path<Uuid>,
-    State(state): State<AppState>,
-) -> Result<Json<MigrationExtractionTriggerReceipt>, (StatusCode, Json<serde_json::Value>)> {
-    let record = load_migration_record(&state, migration_id)
-        .await
-        .map_err(json_db_error)?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("migration {migration_id} was not found")
-            })),
-        ))?;
-
-    let workflow_request = migration_page_extraction_workflow_request(&state, &record)?;
-    let definition = state
-        .workflows
-        .admit(&workflow_request)
-        .map_err(|error| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": error.to_string()
-                })),
-            )
-        })?
-        .clone();
-
-    let result = start_temporal_workflow(&state.config, &workflow_request)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({
-                    "error": error
-                })),
-            )
-        })?;
-
-    Ok(Json(MigrationExtractionTriggerReceipt {
-        admitted: true,
-        migration_id,
-        workflow_id: result.workflow_id,
-        run_id: result.run_id,
-        temporal_queue: definition.temporal_queue,
-        temporal_namespace: result.namespace,
-        temporal_ui_url: state.config.temporal_ui_url.clone(),
-    }))
-}
-
-async fn sync_migration_page_extraction(
-    Path(migration_id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(request): Json<WorkflowResultSyncRequest>,
-) -> Result<Json<MigrationSyncReceipt>, (StatusCode, Json<serde_json::Value>)> {
-    let repository = state.repository.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({
-            "error": "migration extraction sync requires a configured database"
-        })),
-    ))?;
-    let record = load_migration_record(&state, migration_id)
-        .await
-        .map_err(json_db_error)?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("migration {migration_id} was not found")
-            })),
-        ))?;
-
-    let workflow = load_temporal_workflow_result(&state.config, &request.workflow_id)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": error
-                })),
-            )
-        })?;
-
-    let synced_record = persist_migration_extraction_result(repository, &record, &workflow.result)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": error
-                })),
-            )
-        })?;
-
-    let synced_record = load_migration_record(&state, synced_record.id)
-        .await
-        .map_err(json_db_error)?
-        .ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": "synced migration record could not be reloaded"
-            })),
-        ))?;
-
-    Ok(Json(MigrationSyncReceipt {
-        synced: true,
-        migration_id: synced_record.id,
-        workflow_id: request.workflow_id,
         status: synced_record.status,
         page_count: synced_record.pages.len(),
         warnings: synced_record.warnings,
@@ -1883,17 +1750,15 @@ async fn migration_console() -> Html<String> {
                 Existing Migration
                 <select id="migration-id"></select>
               </label>
-              <label>
-                Extraction Workflow ID
-                <input id="extraction-workflow-id" placeholder="cms-..." />
-              </label>
+              <div>
+                <p style="margin: 0 0 8px;"><strong>Workflow model</strong></p>
+                <p style="margin: 0;">Discovery and extraction now run inside one Temporal workflow timeline.</p>
+              </div>
             </div>
             <div class="actions" style="margin: 12px 0 14px;">
               <button type="button" class="secondary" id="refresh-migrations">Refresh migrations</button>
               <button type="button" class="secondary" id="load-selected">Load selected job</button>
-              <button type="button" class="secondary" id="sync-discovery">Sync discovery</button>
-              <button type="button" class="secondary" id="extract-pages">Extract page documents</button>
-              <button type="button" class="secondary" id="sync-extraction">Sync extraction</button>
+              <button type="button" class="secondary" id="sync-workflow">Sync workflow result</button>
               <button type="button" id="approve-job">Approve job</button>
               <button type="button" class="secondary" id="import-draft">Import draft</button>
             </div>
@@ -1910,11 +1775,9 @@ async fn migration_console() -> Html<String> {
       const targetModeEl = document.getElementById("target-mode");
       const siteSelect = document.getElementById("site-id");
       const migrationSelect = document.getElementById("migration-id");
-      const extractionWorkflowInput = document.getElementById("extraction-workflow-id");
       const summaryEl = document.getElementById("summary");
       const pagesEl = document.getElementById("pages");
       let latestMigrationId = null;
-      let latestExtractionWorkflowId = null;
 
       function setStatus(value) {
         statusEl.textContent = value;
@@ -1933,7 +1796,6 @@ async fn migration_console() -> Html<String> {
           <p><strong>status</strong>: ${job.status}</p>
           <p><strong>homepage</strong>: ${job.homepage_url}</p>
           <p><strong>page_count</strong>: ${job.page_count}</p>
-          <p><strong>discovery workflow</strong>: ${job.workflow_id}</p>
         `;
         summaryEl.appendChild(block);
 
@@ -2084,15 +1946,15 @@ async fn migration_console() -> Html<String> {
         }
       });
 
-      document.getElementById("sync-discovery").addEventListener("click", async () => {
+      document.getElementById("sync-workflow").addEventListener("click", async () => {
         if (!latestMigrationId) {
           setStatus("idle");
           setLog("No migration selected.");
           return;
         }
         try {
-          setStatus("syncing discovery");
-          const result = await fetchJson(`/api/migrations/${latestMigrationId}/sync-discovery`, {
+          setStatus("syncing workflow");
+          const result = await fetchJson(`/api/migrations/${latestMigrationId}/sync-workflow`, {
             method: "POST"
           });
           setLog(result);
@@ -2118,58 +1980,6 @@ async fn migration_console() -> Html<String> {
           if (result.preview_url) {
             window.open(result.preview_url, "_blank", "noopener,noreferrer");
           }
-          await loadMigration(latestMigrationId);
-        } catch (error) {
-          setStatus("error");
-          setLog(String(error));
-        }
-      });
-
-      document.getElementById("extract-pages").addEventListener("click", async () => {
-        if (!latestMigrationId) {
-          setStatus("idle");
-          setLog("No migration selected.");
-          return;
-        }
-        try {
-          setStatus("triggering extraction");
-          const result = await fetchJson(`/api/migrations/${latestMigrationId}/extract-page-documents`, {
-            method: "POST"
-          });
-          latestExtractionWorkflowId = result.workflow_id;
-          extractionWorkflowInput.value = result.workflow_id;
-          setLog(result);
-          setStatus(`extraction started: ${result.workflow_id}`);
-        } catch (error) {
-          setStatus("error");
-          setLog(String(error));
-        }
-      });
-
-      document.getElementById("sync-extraction").addEventListener("click", async () => {
-        if (!latestMigrationId) {
-          setStatus("idle");
-          setLog("No migration selected.");
-          return;
-        }
-        const workflowId = extractionWorkflowInput.value.trim() || latestExtractionWorkflowId;
-        if (!workflowId) {
-          setStatus("idle");
-          setLog("No extraction workflow id is available yet.");
-          return;
-        }
-        try {
-          setStatus("syncing extraction");
-          const result = await fetchJson(`/api/migrations/${latestMigrationId}/sync-extraction`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json"
-            },
-            body: JSON.stringify({
-              workflow_id: workflowId
-            })
-          });
-          setLog(result);
           await loadMigration(latestMigrationId);
         } catch (error) {
           setStatus("error");
@@ -2220,8 +2030,6 @@ async fn migration_console() -> Html<String> {
             body: JSON.stringify(payload)
           });
           latestMigrationId = result.migration_id;
-          latestExtractionWorkflowId = null;
-          extractionWorkflowInput.value = "";
           setLog(result);
           await loadMigrations();
           await loadMigration(result.migration_id);
@@ -2333,63 +2141,6 @@ fn migration_workflow_request(
         artifact_contract: WorkflowArtifactContract {
             output_schema: "schemas/site-migration-output.json".to_owned(),
             creates_snapshot: true,
-            mutates_branch_head: false,
-        },
-        safety_policy: WorkflowSafetyPolicy {
-            requires_human_approval: true,
-            max_sites_touched: 1,
-            allow_publish_side_effects: false,
-        },
-    })
-}
-
-fn migration_page_extraction_workflow_request(
-    state: &AppState,
-    record: &MigrationJobRecord,
-) -> Result<WorkflowRequest, (StatusCode, Json<serde_json::Value>)> {
-    let definition = state
-        .workflows
-        .definition_for_kind(WorkflowKind::SiteMigration)
-        .ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": "site migration workflow definition is missing"
-            })),
-        ))?;
-
-    let pages = record
-        .pages
-        .iter()
-        .map(|page| {
-            serde_json::json!({
-                "path": page.path,
-                "title_guess": page.title_guess,
-                "widget_matches": page.widget_matches,
-                "source_url": source_url_for_migration_page(record, page),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    Ok(WorkflowRequest {
-        id: Uuid::new_v4(),
-        kind: WorkflowKind::SiteMigration,
-        site_id: record.site_id,
-        branch_name: record.branch_name.clone(),
-        requested_runtime: AgentRuntime::Python,
-        temporal_queue: definition.temporal_queue.clone(),
-        input_payload: serde_json::json!({
-            "action": "extract_page_documents",
-            "migration_job_id": record.id,
-            "homepage_url": record.homepage_url,
-            "client_id": record.client_id,
-            "location_id": record.location_id,
-            "legacy_api_profile": record.legacy_api_profile,
-            "options": record.options,
-            "pages": pages,
-        }),
-        artifact_contract: WorkflowArtifactContract {
-            output_schema: "schemas/site-migration-output.json".to_owned(),
-            creates_snapshot: false,
             mutates_branch_head: false,
         },
         safety_policy: WorkflowSafetyPolicy {
@@ -2727,17 +2478,6 @@ fn imported_page_draft_from_migration_page(
         page_document,
         document_candidate,
     }
-}
-
-fn source_url_for_migration_page(
-    record: &MigrationJobRecord,
-    page: &MigrationPageDetail,
-) -> String {
-    let base = record.homepage_url.trim_end_matches('/');
-    if page.path == "/" {
-        return format!("{base}/");
-    }
-    format!("{base}{}", page.path)
 }
 
 fn page_document_from_artifact(artifact: &serde_json::Value, page_title: &str) -> PageDocument {
@@ -3100,85 +2840,6 @@ async fn persist_migration_workflow_result(
         warnings,
         created_at: record.created_at,
         approved_at: record.approved_at,
-    })
-}
-
-async fn persist_migration_extraction_result(
-    repository: &PgRepository,
-    record: &MigrationJobRecord,
-    workflow_result: &serde_json::Value,
-) -> Result<MigrationJobRecord, String> {
-    let migration = workflow_result
-        .get("migration")
-        .and_then(serde_json::Value::as_object)
-        .ok_or("workflow result is missing a migration payload")?;
-    let action = migration
-        .get("action")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if action != "extract_page_documents" {
-        return Err(format!(
-            "workflow result action was {action:?}; expected extract_page_documents"
-        ));
-    }
-
-    let warnings = migration
-        .get("warnings")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let pages = migration
-        .get("pages")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("migration extraction result is missing pages")?;
-
-    repository
-        .update_migration_job_review_data(
-            record.id,
-            migration_status_name(&MigrationStatus::ReviewReady),
-            &sqlx::types::Json(warnings.clone()),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let existing_rows = repository
-        .migration_pages(record.id)
-        .await
-        .map_err(|error| error.to_string())?;
-    let by_path = existing_rows
-        .into_iter()
-        .map(|row| (row.path.clone(), row))
-        .collect::<HashMap<_, _>>();
-
-    for page in pages {
-        let path = page
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .ok_or("extracted page is missing path")?;
-        let Some(existing_row) = by_path.get(path) else {
-            continue;
-        };
-        let page_detail = migration_page_detail_from_result(existing_row.id, page)?;
-        let page_row = migration_page_row_from_detail(record.id, &page_detail);
-        repository
-            .update_migration_page(&page_row)
-            .await
-            .map_err(|error| error.to_string())?;
-        let artifact_row = migration_page_artifact_row_from_result(existing_row.id, page)?;
-        repository
-            .upsert_migration_page_artifact(&artifact_row)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-
-    Ok(MigrationJobRecord {
-        warnings,
-        ..record.clone()
     })
 }
 

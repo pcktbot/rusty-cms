@@ -46,7 +46,7 @@ cargo run -p cms-api
 
 Then `POST /api/sites/:site_id/workflow-requests/trigger` with a valid workflow
 request payload. Migration discovery results can be pulled back into Postgres via
-`POST /api/migrations/:migration_id/sync-discovery`.
+`POST /api/migrations/:migration_id/sync-workflow`.
 
 ## AI workflow runtime
 
