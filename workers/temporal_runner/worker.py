@@ -9,7 +9,8 @@ from temporalio.worker import Worker
 
 from rusty_cms_temporal.activities import (
     execute_ai_content_operation,
-    execute_site_migration_activity,
+    execute_page_document_extraction_activity,
+    execute_site_discovery_activity,
 )
 from rusty_cms_temporal.env import load_environment, validate_runtime_environment
 from rusty_cms_temporal.workflows import CmsWorkflowRequest
@@ -38,7 +39,8 @@ async def main() -> None:
                 task_queue=task_queue,
                 activities=[
                     execute_ai_content_operation,
-                    execute_site_migration_activity,
+                    execute_site_discovery_activity,
+                    execute_page_document_extraction_activity,
                 ],
                 workflows=[CmsWorkflowRequest],
             )
